@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 3.8)
 project(jetank_perception)
 
-# Find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -11,32 +10,39 @@ find_package(pcl_conversions REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(PCL REQUIRED)
 
-# GStreamer for Jetson
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0)
 
-# Add executable
-add_executable(stereo_camera_node src/stereo_camera_node.cpp)
+add_executable(stereo_camera_node 
+  src/stereo_camera_node.cpp
+  src/camera_factory.cpp
+  src/point_cloud_filter.cpp
+  src/stereo_processing_factory.cpp)
 
-# Include directories
+ament_target_dependencies(stereo_camera_node 
+  rclcpp
+  sensor_msgs
+  cv_bridge
+  camera_info_manager
+  pcl_conversions
+  OpenCV)
+
 target_include_directories(stereo_camera_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>)
+  $<INSTALL_INTERFACE:include>
+  ${GST_INCLUDE_DIRS})
 
-# Link libraries
 target_link_libraries(stereo_camera_node
+  jetson_stereo_utils
   ${OpenCV_LIBS}
   ${PCL_LIBRARIES}
   ${GST_LIBRARIES})
 
-# Install targets
 install(TARGETS stereo_camera_node
   DESTINATION lib/${PROJECT_NAME})
 
-# Install launch files
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}/)
 
-# Install config files
 install(DIRECTORY config
   DESTINATION share/${PROJECT_NAME}/)
