@@ -63,7 +63,7 @@ private:
 } // namespace jetson_stereo_camera
 
 // Implementation file: src/jetson_csi_camera.cpp
-#include "jetson_stereo_camera/jetson_csi_camera.hpp"
+#include "jetank_perception/jetson_csi_camera.hpp"
 #include <sstream>
 #include <iostream>
 
