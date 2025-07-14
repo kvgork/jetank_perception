@@ -15,9 +15,8 @@ pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0)
 
 add_executable(stereo_camera_node 
   src/stereo_camera_node.cpp
-  src/camera_factory.cpp
-  src/point_cloud_filter.cpp
-  src/stereo_processing_factory.cpp)
+  src/camera_interface.cpp
+  src/stereo_processing_strategy.cpp)
 
 ament_target_dependencies(stereo_camera_node 
   rclcpp
@@ -33,7 +32,6 @@ target_include_directories(stereo_camera_node PUBLIC
   ${GST_INCLUDE_DIRS})
 
 target_link_libraries(stereo_camera_node
-  jetson_stereo_utils
   ${OpenCV_LIBS}
   ${PCL_LIBRARIES}
   ${GST_LIBRARIES})
@@ -41,8 +39,8 @@ target_link_libraries(stereo_camera_node
 install(TARGETS stereo_camera_node
   DESTINATION lib/${PROJECT_NAME})
 
-install(DIRECTORY launch
-  DESTINATION share/${PROJECT_NAME}/)
+# install(DIRECTORY launch
+#   DESTINATION share/${PROJECT_NAME}/)
 
 install(DIRECTORY config
   DESTINATION share/${PROJECT_NAME}/)
