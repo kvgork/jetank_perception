@@ -5,13 +5,9 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <mutex>
 
 namespace jetson_stereo_camera {
-
-// Forward declarations for concrete camera implementations
-class JetsonCSICamera;
-class USBCamera;
-class VirtualCamera;
 
 // =============================================================================
 // Jetson CSI Camera Implementation
@@ -147,12 +143,34 @@ public:
 
 private:
     std::string build_gstreamer_pipeline(const CameraConfig& config) {
-        std::string nvarguscamerasrc = "nvarguscamerasrc sensor-id=" + std::to_string(config.sensor_id);
+    //     // Try multiple pipeline configurations in order of preference
+    // std::vector<std::string> pipeline_templates = {
+    //     // Template 1: Full featured (newer JetPack versions)
+    //     "nvarguscamerasrc sensor-id=%d bufapi-version=1 ! video/x-raw(memory:NVMM), width=%d, height=%d, format=%s, framerate=%d/1 ! nvvidconv ! video/x-raw, format=BGR ! appsink",
+        
+    //     // Template 2: Basic but reliable (most JetPack versions)
+    //     "nvarguscamerasrc sensor-id=%d ! nvvidconv ! video/x-raw, width=%d, height=%d, format=BGR ! appsink",
+        
+    //     // Template 3: Minimal fallback
+    //     "nvarguscamerasrc sensor-id=%d ! nvvidconv ! appsink"
+    // };
+    
+    // // Use first template for now, but this could be enhanced to test each one
+    // char pipeline_buffer[512];
+    // snprintf(pipeline_buffer, sizeof(pipeline_buffer), 
+    //          pipeline_templates[0].c_str(),
+    //          config.sensor_id, config.width, config.height, 
+    //          config.format.c_str(), config.fps);
+    
+    // return std::string(pipeline_buffer);
+        // Add bufapi-version property that the system is expecting
+        std::string nvarguscamerasrc = "nvarguscamerasrc sensor-id=" + std::to_string(config.sensor_id) + 
+                                    " bufapi-version=1";
         
         std::string caps = "video/x-raw(memory:NVMM), width=" + std::to_string(config.width) + 
-                          ", height=" + std::to_string(config.height) + 
-                          ", format=" + config.format + 
-                          ", framerate=" + std::to_string(config.fps) + "/1";
+                        ", height=" + std::to_string(config.height) + 
+                        ", format=" + config.format + 
+                        ", framerate=" + std::to_string(config.fps) + "/1";
         
         std::string converter = config.use_hardware_acceleration ? "nvvidconv" : "videoconvert";
         std::string sink_caps = "video/x-raw, format=BGR";

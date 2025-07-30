@@ -5,6 +5,7 @@
 #include <string>
 #include <atomic>
 #include <functional>
+#include <vector>
 
 namespace jetson_stereo_camera {
 
@@ -62,4 +63,4 @@ public:
     static std::vector<std::string> get_available_cameras();
 };
 
-}
+} // namespace jetson_stereo_camera
