@@ -1,63 +1,72 @@
 #pragma once
 
 #include <opencv2/opencv.hpp>
-#include <memory>
 #include <string>
-#include <atomic>
 #include <functional>
-#include <vector>
+#include <memory>
+#include <atomic>
+#include <map>
 
 namespace jetson_stereo_camera {
 
+// Camera configuration structure
 struct CameraConfig {
-    int width;
-    int height;
-    int fps;
-    int sensor_id;
-    std::string format;
-    bool use_hardware_acceleration;
-    
-    CameraConfig(int w = 640, int h = 480, int f = 20, int id = 0, 
-                const std::string& fmt = "GRAY8", bool hw_accel = true)
-        : width(w), height(h), fps(f), sensor_id(id), format(fmt), use_hardware_acceleration(hw_accel) {}
+    int sensor_id = 0;
+    int width = 640;
+    int height = 480;
+    int fps = 30;
+    std::string format = "NV12";
+    bool use_hardware_acceleration = true;
 };
 
+// Camera type enumeration
+enum class CameraType {
+    JETSON_CSI,
+    USB_CAMERA,
+    VIRTUAL_CAMERA
+};
+
+// Base camera interface
 class CameraInterface {
 public:
     virtual ~CameraInterface() = default;
     
-    // Core camera operations
     virtual bool initialize(const CameraConfig& config) = 0;
     virtual bool start() = 0;
     virtual bool stop() = 0;
     virtual bool is_running() const = 0;
     
-    // Frame acquisition
     virtual cv::Mat get_frame() = 0;
     virtual bool get_frame_async(std::function<void(const cv::Mat&)> callback) = 0;
     
-    // Camera properties
     virtual std::string get_camera_type() const = 0;
     virtual bool supports_hardware_acceleration() const = 0;
     virtual CameraConfig get_config() const = 0;
     
-    // Performance optimization
     virtual void set_buffer_size(int size) = 0;
     virtual void enable_threading(bool enable) = 0;
-    
+
 protected:
-    std::atomic<bool> running_{false};
     CameraConfig config_;
+    std::atomic<bool> running_{false};
+    
+    // NEW: Pipeline template structure for robust pipeline testing
+    struct PipelineTemplate {
+        std::string name;
+        std::string template_str;
+        std::string description;
+        int priority; // Lower number = higher priority
+    };
+    
+    // NEW: Static cache for successful pipeline configurations
+    static std::map<std::string, std::string> pipeline_cache_;
 };
 
-// Factory for creating camera instances
+// Camera factory
 class CameraFactory {
 public:
-    enum class CameraType {
-        JETSON_CSI,
-        USB_CAMERA,
-        VIRTUAL_CAMERA
-    };
+    // Make CameraType accessible through CameraFactory for backward compatibility
+    using CameraType = jetson_stereo_camera::CameraType;
     
     static std::unique_ptr<CameraInterface> create_camera(CameraType type);
     static std::vector<std::string> get_available_cameras();

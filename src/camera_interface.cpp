@@ -9,6 +9,9 @@
 
 namespace jetson_stereo_camera {
 
+// Initialize the static pipeline cache
+std::map<std::string, std::string> CameraInterface::pipeline_cache_;
+
 // =============================================================================
 // Jetson CSI Camera Implementation
 // =============================================================================
@@ -31,7 +34,7 @@ public:
     bool initialize(const CameraConfig& config) override {
         config_ = config;
         
-        // Build GStreamer pipeline for Jetson CSI camera
+        // Use robust pipeline building with testing and caching
         std::string pipeline = build_gstreamer_pipeline(config);
         
         cap_.open(pipeline, cv::CAP_GSTREAMER);
@@ -142,40 +145,184 @@ public:
     }
 
 private:
+    // NEW: Robust pipeline builder with testing and caching
     std::string build_gstreamer_pipeline(const CameraConfig& config) {
-    //     // Try multiple pipeline configurations in order of preference
-    // std::vector<std::string> pipeline_templates = {
-    //     // Template 1: Full featured (newer JetPack versions)
-    //     "nvarguscamerasrc sensor-id=%d bufapi-version=1 ! video/x-raw(memory:NVMM), width=%d, height=%d, format=%s, framerate=%d/1 ! nvvidconv ! video/x-raw, format=BGR ! appsink",
+        // Create a cache key based on configuration
+        std::string cache_key = create_cache_key(config);
         
-    //     // Template 2: Basic but reliable (most JetPack versions)
-    //     "nvarguscamerasrc sensor-id=%d ! nvvidconv ! video/x-raw, width=%d, height=%d, format=BGR ! appsink",
+        // Check if we have a cached working pipeline for this configuration
+        auto cached_it = pipeline_cache_.find(cache_key);
+        if (cached_it != pipeline_cache_.end()) {
+            std::cout << "[PIPELINE] Using cached pipeline for " << cache_key << std::endl;
+            std::cout << "[PIPELINE] " << cached_it->second << std::endl;
+            return cached_it->second;
+        }
         
-    //     // Template 3: Minimal fallback
-    //     "nvarguscamerasrc sensor-id=%d ! nvvidconv ! appsink"
-    // };
+        // Define pipeline templates in order of preference
+        std::vector<PipelineTemplate> templates = get_pipeline_templates(config);
+        
+        std::cout << "[PIPELINE] Testing " << templates.size() << " pipeline configurations for:" << std::endl;
+        std::cout << "[PIPELINE]   Resolution: " << config.width << "x" << config.height << std::endl;
+        std::cout << "[PIPELINE]   FPS: " << config.fps << ", Format: " << config.format << std::endl;
+        std::cout << "[PIPELINE]   Sensor ID: " << config.sensor_id << std::endl;
+        std::cout << "[PIPELINE]   HW Accel: " << (config.use_hardware_acceleration ? "Yes" : "No") << std::endl;
+        
+        // Test each pipeline template
+        for (const auto& template_config : templates) {
+            std::string pipeline = build_pipeline_from_template(template_config, config);
+            
+            std::cout << "[PIPELINE] Testing: " << template_config.name << std::endl;
+            std::cout << "[PIPELINE]   Description: " << template_config.description << std::endl;
+            std::cout << "[PIPELINE]   Pipeline: " << pipeline << std::endl;
+            
+            if (test_pipeline_compatibility(pipeline)) {
+                std::cout << "[PIPELINE] ✓ SUCCESS: " << template_config.name << " works!" << std::endl;
+                
+                // Cache this successful configuration
+                pipeline_cache_[cache_key] = pipeline;
+                
+                return pipeline;
+            } else {
+                std::cout << "[PIPELINE] ✗ FAILED: " << template_config.name << " - trying next option" << std::endl;
+            }
+        }
+        
+        // If all templates fail, return a minimal fallback
+        std::string fallback = get_fallback_pipeline(config);
+        std::cout << "[PIPELINE] ⚠ WARNING: All templates failed, using fallback:" << std::endl;
+        std::cout << "[PIPELINE] " << fallback << std::endl;
+        
+        return fallback;
+    }
     
-    // // Use first template for now, but this could be enhanced to test each one
-    // char pipeline_buffer[512];
-    // snprintf(pipeline_buffer, sizeof(pipeline_buffer), 
-    //          pipeline_templates[0].c_str(),
-    //          config.sensor_id, config.width, config.height, 
-    //          config.format.c_str(), config.fps);
+    // NEW: Get pipeline templates in order of preference
+    std::vector<PipelineTemplate> get_pipeline_templates(const CameraConfig& config) {
+        // Note: config parameter reserved for future template customization
+        (void)config; // Suppress unused parameter warning
+        std::vector<PipelineTemplate> templates;
+        
+        // Template 1: High-performance, hardware-accelerated (best for stereo vision)
+        templates.push_back({
+            "HW_Accelerated_BGRx",
+            "nvarguscamerasrc sensor-id=%d ! video/x-raw(memory:NVMM), width=%d, height=%d, format=%s, framerate=%d/1 ! nvvidconv ! video/x-raw, format=BGRx ! videoconvert ! video/x-raw, format=BGR ! appsink",
+            "Hardware accelerated with NVMM memory, BGRx->BGR conversion",
+            1
+        });
+        
+        // Template 2: Hardware-accelerated with RGBA (good fallback)
+        templates.push_back({
+            "HW_Accelerated_RGBA",
+            "nvarguscamerasrc sensor-id=%d ! video/x-raw(memory:NVMM), width=%d, height=%d, format=%s, framerate=%d/1 ! nvvidconv ! video/x-raw, format=RGBA ! videoconvert ! video/x-raw, format=BGR ! appsink",
+            "Hardware accelerated with NVMM memory, RGBA->BGR conversion",
+            2
+        });
+        
+        // Template 3: Simple hardware-accelerated (auto-negotiated format)
+        templates.push_back({
+            "HW_Accelerated_Auto",
+            "nvarguscamerasrc sensor-id=%d ! nvvidconv ! video/x-raw, width=%d, height=%d ! videoconvert ! video/x-raw, format=BGR ! appsink",
+            "Hardware accelerated with auto format negotiation",
+            3
+        });
+        
+        // Template 4: Software fallback (no hardware acceleration)
+        templates.push_back({
+            "Software_Fallback",
+            "nvarguscamerasrc sensor-id=%d ! videoconvert ! video/x-raw, width=%d, height=%d, format=BGR ! appsink",
+            "Software-only conversion (slower but compatible)",
+            4
+        });
+        
+        // Template 5: Minimal pipeline (last resort)
+        templates.push_back({
+            "Minimal",
+            "nvarguscamerasrc sensor-id=%d ! videoconvert ! video/x-raw, format=BGR ! appsink",
+            "Minimal pipeline with no size constraints",
+            5
+        });
+        
+        // Sort by priority (lower number = higher priority)
+        std::sort(templates.begin(), templates.end(), 
+                  [](const PipelineTemplate& a, const PipelineTemplate& b) {
+                      return a.priority < b.priority;
+                  });
+        
+        return templates;
+    }
     
-    // return std::string(pipeline_buffer);
-        // Add bufapi-version property that the system is expecting
-        std::string nvarguscamerasrc = "nvarguscamerasrc sensor-id=" + std::to_string(config.sensor_id) + 
-                                    " bufapi-version=1";
+    // NEW: Build pipeline string from template
+    std::string build_pipeline_from_template(const PipelineTemplate& template_config, 
+                                           const CameraConfig& config) {
+        char pipeline_buffer[1024];
         
-        std::string caps = "video/x-raw(memory:NVMM), width=" + std::to_string(config.width) + 
-                        ", height=" + std::to_string(config.height) + 
-                        ", format=" + config.format + 
-                        ", framerate=" + std::to_string(config.fps) + "/1";
+        // Different templates need different parameters
+        if (template_config.name == "Minimal") {
+            snprintf(pipeline_buffer, sizeof(pipeline_buffer), 
+                     template_config.template_str.c_str(),
+                     config.sensor_id);
+        } else if (template_config.name == "Software_Fallback") {
+            snprintf(pipeline_buffer, sizeof(pipeline_buffer), 
+                     template_config.template_str.c_str(),
+                     config.sensor_id, config.width, config.height);
+        } else if (template_config.name == "HW_Accelerated_Auto") {
+            snprintf(pipeline_buffer, sizeof(pipeline_buffer), 
+                     template_config.template_str.c_str(),
+                     config.sensor_id, config.width, config.height);
+        } else {
+            // Full parameter templates
+            snprintf(pipeline_buffer, sizeof(pipeline_buffer), 
+                     template_config.template_str.c_str(),
+                     config.sensor_id, config.width, config.height, 
+                     config.format.c_str(), config.fps);
+        }
         
-        std::string converter = config.use_hardware_acceleration ? "nvvidconv" : "videoconvert";
-        std::string sink_caps = "video/x-raw, format=BGR";
+        return std::string(pipeline_buffer);
+    }
+    
+    // NEW: Test if a pipeline can be created and used
+    bool test_pipeline_compatibility(const std::string& pipeline) {
+        // Test if the pipeline can be created and initialized
+        cv::VideoCapture test_cap;
         
-        return nvarguscamerasrc + " ! " + caps + " ! " + converter + " ! " + sink_caps + " ! appsink";
+        try {
+            // Try to open the pipeline
+            test_cap.open(pipeline, cv::CAP_GSTREAMER);
+            
+            if (!test_cap.isOpened()) {
+                return false;
+            }
+            
+            // Try to read one frame to ensure it actually works
+            cv::Mat test_frame;
+            bool frame_read = test_cap.read(test_frame);
+            
+            test_cap.release();
+            
+            return frame_read && !test_frame.empty();
+            
+        } catch (const std::exception& e) {
+            std::cout << "[PIPELINE]   Exception during test: " << e.what() << std::endl;
+            if (test_cap.isOpened()) {
+                test_cap.release();
+            }
+            return false;
+        }
+    }
+    
+    // NEW: Get minimal fallback pipeline
+    std::string get_fallback_pipeline(const CameraConfig& config) {
+        // Most basic pipeline that should work on any system
+        return "nvarguscamerasrc sensor-id=" + std::to_string(config.sensor_id) + 
+               " ! videoconvert ! appsink";
+    }
+    
+    // NEW: Create cache key for configuration
+    std::string create_cache_key(const CameraConfig& config) {
+        // Create a unique key for this configuration
+        return std::to_string(config.sensor_id) + "_" +
+               std::to_string(config.width) + "x" + std::to_string(config.height) + "_" +
+               std::to_string(config.fps) + "fps_" + config.format + "_" +
+               (config.use_hardware_acceleration ? "hw" : "sw");
     }
 
     void capture_loop() {
@@ -200,7 +347,7 @@ private:
 };
 
 // =============================================================================
-// USB Camera Implementation
+// USB Camera Implementation (unchanged)
 // =============================================================================
 class USBCamera : public CameraInterface {
 private:
@@ -354,7 +501,7 @@ private:
 };
 
 // =============================================================================
-// Virtual Camera Implementation (for testing)
+// Virtual Camera Implementation (unchanged)
 // =============================================================================
 class VirtualCamera : public CameraInterface {
 private:
@@ -457,6 +604,7 @@ public:
 
     void set_buffer_size(int size) override {
         // Not applicable for virtual camera
+        (void)size; // Suppress unused parameter warning
     }
 
     void enable_threading(bool enable) override {

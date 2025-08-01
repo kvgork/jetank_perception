@@ -8,7 +8,6 @@
 #include <pcl_conversions/pcl_conversions.h>
 
 #include "jetank_perception/camera_interface.hpp"
-#include "jetank_perception/jetson_csi_camera.hpp"
 #include "jetank_perception/stereo_processing_strategy.hpp"
 
 #include <opencv2/opencv.hpp>
