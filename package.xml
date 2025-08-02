@@ -11,11 +11,13 @@
 
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
+  <depend>stereo_msgs</depend>
   <depend>cv_bridge</depend>
   <depend>camera_info_manager</depend>
   <depend>pcl_conversions</depend>
   <depend>libopencv-dev</depend>
   <depend>libpcl-dev</depend>
+  <depend>libpcl-all-dev</depend>
   <depend>libgstreamer1.0-dev</depend>
   <depend>libgstreamer-plugins-base1.0-dev</depend>
 
