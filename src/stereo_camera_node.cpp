@@ -298,33 +298,6 @@ private:
                    camera_config_.width, camera_config_.height, camera_config_.fps);
     }
     
-    // void create_stereo_processor() {
-    //     std::string algorithm = get_parameter("stereo_algorithm").as_string();
-        
-    //     StereoProcessingFactory::StrategyType strategy_type;
-    //     if (algorithm == "GPU_BM") {
-    //         strategy_type = StereoProcessingFactory::StrategyType::GPU_BM;
-    //     } else if (algorithm == "CPU_BM") {
-    //         strategy_type = StereoProcessingFactory::StrategyType::CPU_BM;
-    //     } else if (algorithm == "GPU_SGBM") {
-    //         strategy_type = StereoProcessingFactory::StrategyType::GPU_SGBM;
-    //     } else if (algorithm == "CPU_SGBM") {
-    //         strategy_type = StereoProcessingFactory::StrategyType::CPU_SGBM;
-    //     } else {
-    //         RCLCPP_WARN(get_logger(), "Unknown stereo algorithm: %s, using GPU_BM", algorithm.c_str());
-    //         strategy_type = StereoProcessingFactory::StrategyType::GPU_BM;
-    //     }
-        
-    //     stereo_processor_ = StereoProcessingFactory::create_strategy(strategy_type);
-        
-    //     if (!stereo_processor_->initialize(stereo_config_, 
-    //                                      cv::Size(camera_config_.width, camera_config_.height))) {
-    //         throw std::runtime_error("Failed to initialize stereo processor");
-    //     }
-        
-    //     RCLCPP_INFO(get_logger(), "Created stereo processor: %s", 
-    //                stereo_processor_->get_strategy_name().c_str());
-    // }
     void create_stereo_processor() {
         std::string algorithm = get_parameter("stereo_algorithm").as_string();
         
