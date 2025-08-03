@@ -24,6 +24,7 @@ struct CameraConfig {
     int sensor_id = 0;
     std::string format = "BGR";
     bool use_hardware_acceleration = true;
+    bool flip_180 = false;
 };
 
 // Pipeline template structure for robust pipeline building

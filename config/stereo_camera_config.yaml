@@ -1,0 +1,111 @@
+# Stereo Camera Configuration for jetank_perception
+# Save this as: config/stereo_camera_config.yaml
+
+stereo_camera_node:
+  ros__parameters:
+    # ============================================================================
+    # CAMERA CONFIGURATION - Using dot notation to match C++ declarations
+    # ============================================================================
+    camera.width: 640
+    camera.height: 480
+    camera.fps: 20
+    camera.format: "BGR8"
+    camera.flip_images_180: true 
+    camera.left_sensor_id: 1
+    camera.right_sensor_id: 0
+    camera.use_hardware_acceleration: true
+    camera.buffer_size: 3
+    camera.processing_threads: 4
+    camera.processing_quality: "balanced"
+
+    # ============================================================================
+    # FRAME CONFIGURATION
+    # ============================================================================
+    frames.left_frame_id: "camera_left_link"
+    frames.right_frame_id: "camera_right_link" 
+    frames.base_frame_id: "base_link"
+
+    # ============================================================================
+    # STEREO PROCESSING CONFIGURATION
+    # ============================================================================
+    stereo.algorithm: "GPU_BM"
+    stereo.use_gpu: true
+    stereo.num_disparities: 64
+    stereo.block_size: 15
+    stereo.min_disparity: 0
+    stereo.uniqueness_ratio: 10
+    stereo.speckle_window_size: 100
+    stereo.speckle_range: 32
+    stereo.disp12_max_diff: 1
+    stereo.pre_filter_cap: 31
+    stereo.pre_filter_size: 9
+    stereo.texture_threshold: 10
+    stereo.smaller_block_size: 0
+
+    # ============================================================================
+    # CALIBRATION CONFIGURATION  
+    # ============================================================================
+    calibration.left_camera_info_url: "file://$(find-pkg-share jetank_perception)/config/calibration/left_camera.yaml"
+    calibration.right_camera_info_url: "file://$(find-pkg-share jetank_perception)/config/calibration/right_camera.yaml"
+    calibration.stereo_calibration_url: "file://$(find-pkg-share jetank_perception)/config/calibration/stereo_calibration.yaml"
+    calibration.auto_load_calibration: false
+    calibration.min_calibration_samples: 30
+    calibration.max_reprojection_error: 0.5
+    calibration.default.focal_length: 300.0
+    calibration.default.baseline: 0.06
+    calibration.transforms.publish_camera_transforms: false
+
+    # ============================================================================
+    # POINT CLOUD CONFIGURATION
+    # ============================================================================
+    pointcloud.enable: true
+    pointcloud.downsample_factor: 1
+    pointcloud.max_processing_threads: 4
+    pointcloud.voxel_filter.enable: true
+    pointcloud.voxel_filter.leaf_size: 0.01
+    pointcloud.statistical_filter.enable: true
+    pointcloud.statistical_filter.k_neighbors: 50
+    pointcloud.statistical_filter.stddev_threshold: 1.0
+    pointcloud.range_filter.enable: true
+    pointcloud.range_filter.min_range: 0.1
+    pointcloud.range_filter.max_range: 10.0
+    pointcloud.passthrough_filter.enable: false
+    pointcloud.passthrough_filter.x_min: -5.0
+    pointcloud.passthrough_filter.x_max: 5.0
+    pointcloud.passthrough_filter.y_min: -5.0
+    pointcloud.passthrough_filter.y_max: 5.0
+    pointcloud.passthrough_filter.z_min: 0.0
+    pointcloud.passthrough_filter.z_max: 3.0
+
+    # ============================================================================
+    # PUBLISHING CONFIGURATION
+    # ============================================================================
+    publishing.publish_raw_images: true
+    publishing.publish_rectified_images: true
+    publishing.publish_disparity: true
+    publishing.publish_pointcloud: true
+    publishing.qos_depth: 10
+      
+    # ============================================================================
+    # PERFORMANCE AND DEBUGGING
+    # ============================================================================
+    performance.log_performance: true
+    performance.performance_log_interval: 100
+    performance.enable_multithreading: true
+    performance.thread_priority: 0
+    performance.enable_memory_optimization: true
+    performance.max_memory_usage_mb: 500
+      
+    logging.log_calibration_info: true
+    logging.log_processing_stats: false
+    logging.log_frame_drops: true
+
+    # ============================================================================
+    # DEVELOPMENT AND TESTING  
+    # ============================================================================
+    development.save_debug_images: false
+    development.debug_image_path: "/tmp/stereo_debug"
+    development.strict_frame_sync: true
+    development.max_frame_age_ms: 100
+    development.auto_restart_on_error: true
+    development.max_consecutive_errors: 5

@@ -133,6 +133,10 @@ public:
     JetsonStereoNode() : Node("jetson_stereo_node"), processing_active_(false), processing_fps_(0.0) {
         // Initialize components
         initialize_parameters();
+        // In constructor, right after initialize_parameters():
+        RCLCPP_INFO(get_logger(), "Debug: camera.left_sensor_id = %d, camera.flip_images_180 = %s", 
+                get_parameter("camera.left_sensor_id").as_int(),
+                get_parameter("camera.flip_images_180").as_bool() ? "true" : "false");
         create_cameras();
         create_stereo_processor();
         create_calibration();
@@ -145,9 +149,9 @@ public:
         
         // Load calibration
         if (!calibration_->load_calibration(
-            get_parameter("left_camera_info_url").as_string(),
-            get_parameter("right_camera_info_url").as_string(),
-            get_parameter("stereo_calibration_url").as_string(),
+            get_parameter("calibration.left_camera_info_url").as_string(),
+            get_parameter("calibration.right_camera_info_url").as_string(),
+            get_parameter("calibration.stereo_calibration_url").as_string(),
             cv::Size(camera_config_.width, camera_config_.height))) {
             RCLCPP_WARN(get_logger(), "Failed to load calibration, using defaults");
         }
@@ -169,137 +173,220 @@ public:
 
 private:
     void initialize_parameters() {
-        // Camera parameters
-        declare_parameter("camera_width", 640);
-        declare_parameter("camera_height", 480);
-        declare_parameter("camera_fps", 20);
-        declare_parameter("camera_format", "GRAY8");
-        declare_parameter("left_sensor_id", 0);
-        declare_parameter("right_sensor_id", 1);
-        declare_parameter("left_frame_id", "camera_left_link");
-        declare_parameter("right_frame_id", "camera_right_link");
-        declare_parameter("base_frame_id", "base_link");
-        declare_parameter("use_hardware_acceleration", true);
+        // ========================================================================
+        // CAMERA PARAMETERS
+        // ========================================================================
+        declare_parameter("camera.width", 640);
+        declare_parameter("camera.height", 480);
+        declare_parameter("camera.fps", 20);
+        // declare_parameter("camera.format", "GRAY8");
+        // declare_parameter("camera.left_sensor_id", 0);
+        declare_parameter("camera.right_sensor_id", 1);
+        declare_parameter("camera.use_hardware_acceleration", true);
+        declare_parameter("camera.buffer_size", 3);
+        declare_parameter("camera.processing_threads", 4);
+        declare_parameter("camera.processing_quality", "balanced");
+        // declare_parameter("camera.flip_images_180", false);
+        if (!has_parameter("camera.left_sensor_id")) {
+            declare_parameter("camera.left_sensor_id", 0);
+        }
+        if (!has_parameter("camera.flip_images_180")) {
+            declare_parameter("camera.flip_images_180", false);
+        }
+        if (!has_parameter("camera.format")) {
+            declare_parameter("camera.format", std::string("GRAY8"));
+        }
         
-        // Stereo processing parameters
-        declare_parameter("stereo_algorithm", "GPU_BM");
-        declare_parameter("num_disparities", 64);
-        declare_parameter("block_size", 15);
-        declare_parameter("min_disparity", 0);
-        declare_parameter("uniqueness_ratio", 10);
-        declare_parameter("speckle_window_size", 100);
-        declare_parameter("speckle_range", 32);
-        declare_parameter("disp12_max_diff", 1);
-        declare_parameter("use_gpu", true);
+        // ========================================================================
+        // FRAME PARAMETERS
+        // ========================================================================
+        declare_parameter("frames.left_frame_id", "camera_left_link");
+        declare_parameter("frames.right_frame_id", "camera_right_link");
+        declare_parameter("frames.base_frame_id", "base_link");
         
-        // Calibration parameters
-        declare_parameter("left_camera_info_url", "");
-        declare_parameter("right_camera_info_url", "");
-        declare_parameter("stereo_calibration_url", "");
-        declare_parameter("auto_load_calibration", true);
-        declare_parameter("default_focal_length", 300.0);
-        declare_parameter("default_baseline", 0.06);
-        declare_parameter("min_calibration_samples", 30);
-        declare_parameter("max_reprojection_error", 0.5);
+        // ========================================================================
+        // STEREO PROCESSING PARAMETERS
+        // ========================================================================
+        declare_parameter("stereo.algorithm", "GPU_BM");
+        declare_parameter("stereo.use_gpu", true);
+        declare_parameter("stereo.num_disparities", 64);
+        declare_parameter("stereo.block_size", 15);
+        declare_parameter("stereo.min_disparity", 0);
+        declare_parameter("stereo.uniqueness_ratio", 10);
+        declare_parameter("stereo.speckle_window_size", 100);
+        declare_parameter("stereo.speckle_range", 32);
+        declare_parameter("stereo.disp12_max_diff", 1);
+        declare_parameter("stereo.pre_filter_cap", 31);
+        declare_parameter("stereo.pre_filter_size", 9);
+        declare_parameter("stereo.texture_threshold", 10);
+        declare_parameter("stereo.smaller_block_size", 0);
         
-        // Point cloud parameters
-        declare_parameter("enable_pointcloud", true);
-        declare_parameter("voxel_filter_enable", true);
-        declare_parameter("voxel_leaf_size", 0.01);
-        declare_parameter("statistical_filter_enable", true);
-        declare_parameter("statistical_filter_k", 50);
-        declare_parameter("statistical_filter_stddev", 1.0);
-        declare_parameter("range_filter_enable", true);
-        declare_parameter("min_range", 0.1);
-        declare_parameter("max_range", 10.0);
-        declare_parameter("max_processing_threads", 4);
-        declare_parameter("downsample_factor", 1);
+        // ========================================================================
+        // CALIBRATION PARAMETERS
+        // ========================================================================
+        declare_parameter("calibration.left_camera_info_url", "");
+        declare_parameter("calibration.right_camera_info_url", "");
+        declare_parameter("calibration.stereo_calibration_url", "");
+        declare_parameter("calibration.auto_load_calibration", true);
+        declare_parameter("calibration.min_calibration_samples", 30);
+        declare_parameter("calibration.max_reprojection_error", 0.5);
+        declare_parameter("calibration.default.focal_length", 300.0);
+        declare_parameter("calibration.default.baseline", 0.06);
+        declare_parameter("calibration.transforms.publish_camera_transforms", false);
         
-        // ROS parameters
-        declare_parameter("use_sim_time", false);
-        declare_parameter("publish_raw_images", true);
-        declare_parameter("publish_rectified_images", true);
-        declare_parameter("publish_disparity", true);
-        declare_parameter("publish_pointcloud", true);
+        // ========================================================================
+        // POINT CLOUD PARAMETERS
+        // ========================================================================
+        declare_parameter("pointcloud.enable", true);
+        declare_parameter("pointcloud.downsample_factor", 1);
+        declare_parameter("pointcloud.max_processing_threads", 4);
         
-        // Performance parameters
-        declare_parameter("log_performance", true);
-        declare_parameter("performance_log_interval", 100);
-        declare_parameter("processing_threads", 4);
-        declare_parameter("buffer_size", 3);
-        declare_parameter("processing_quality", "balanced");
+        // Voxel filter
+        declare_parameter("pointcloud.voxel_filter.enable", true);
+        declare_parameter("pointcloud.voxel_filter.leaf_size", 0.01);
+        
+        // Statistical filter
+        declare_parameter("pointcloud.statistical_filter.enable", true);
+        declare_parameter("pointcloud.statistical_filter.k_neighbors", 50);
+        declare_parameter("pointcloud.statistical_filter.stddev_threshold", 1.0);
+        
+        // Range filter
+        declare_parameter("pointcloud.range_filter.enable", true);
+        declare_parameter("pointcloud.range_filter.min_range", 0.1);
+        declare_parameter("pointcloud.range_filter.max_range", 10.0);
+        
+        // Passthrough filter
+        declare_parameter("pointcloud.passthrough_filter.enable", false);
+        declare_parameter("pointcloud.passthrough_filter.x_min", -5.0);
+        declare_parameter("pointcloud.passthrough_filter.x_max", 5.0);
+        declare_parameter("pointcloud.passthrough_filter.y_min", -5.0);
+        declare_parameter("pointcloud.passthrough_filter.y_max", 5.0);
+        declare_parameter("pointcloud.passthrough_filter.z_min", 0.0);
+        declare_parameter("pointcloud.passthrough_filter.z_max", 3.0);
+        
+        // ========================================================================
+        // PUBLISHING PARAMETERS
+        // ========================================================================
+        declare_parameter("publishing.publish_raw_images", true);
+        declare_parameter("publishing.publish_rectified_images", true);
+        declare_parameter("publishing.publish_disparity", true);
+        declare_parameter("publishing.publish_pointcloud", true);
+        declare_parameter("publishing.qos_depth", 10);
+        
+        // ========================================================================
+        // PERFORMANCE PARAMETERS
+        // ========================================================================
+        declare_parameter("performance.log_performance", true);
+        declare_parameter("performance.performance_log_interval", 100);
+        declare_parameter("performance.enable_multithreading", true);
+        declare_parameter("performance.thread_priority", 0);
+        declare_parameter("performance.enable_memory_optimization", true);
+        declare_parameter("performance.max_memory_usage_mb", 500);
+        
+        // ========================================================================
+        // LOGGING PARAMETERS
+        // ========================================================================
+        declare_parameter("logging.log_calibration_info", true);
+        declare_parameter("logging.log_processing_stats", false);
+        declare_parameter("logging.log_frame_drops", true);
+        
+        // ========================================================================
+        // DEVELOPMENT PARAMETERS
+        // ========================================================================
+        declare_parameter("development.save_debug_images", false);
+        declare_parameter("development.debug_image_path", "/tmp/stereo_debug");
+        declare_parameter("development.strict_frame_sync", true);
+        declare_parameter("development.max_frame_age_ms", 100);
+        declare_parameter("development.auto_restart_on_error", true);
+        declare_parameter("development.max_consecutive_errors", 5);
+        
+        // NOTE: DO NOT declare "use_sim_time" - ROS2 handles this automatically
         
         // Load parameter values
         load_parameters();
     }
     
     void load_parameters() {
-        // Camera configuration
-        camera_config_.width = get_parameter("camera_width").as_int();
-        camera_config_.height = get_parameter("camera_height").as_int();
-        camera_config_.fps = get_parameter("camera_fps").as_int();
-        camera_config_.format = get_parameter("camera_format").as_string();
-        camera_config_.use_hardware_acceleration = get_parameter("use_hardware_acceleration").as_bool();
+        // ========================================================================
+        // CAMERA CONFIGURATION
+        // ========================================================================
+        camera_config_.width = get_parameter("camera.width").as_int();
+        camera_config_.height = get_parameter("camera.height").as_int();
+        camera_config_.fps = get_parameter("camera.fps").as_int();
+        camera_config_.format = get_parameter("camera.format").as_string();
+        camera_config_.use_hardware_acceleration = get_parameter("camera.use_hardware_acceleration").as_bool();
+        camera_config_.flip_180 = get_parameter("camera.flip_images_180").as_bool();
         
-        left_frame_id_ = get_parameter("left_frame_id").as_string();
-        right_frame_id_ = get_parameter("right_frame_id").as_string();
-        base_frame_id_ = get_parameter("base_frame_id").as_string();
+        // ========================================================================
+        // FRAME CONFIGURATION
+        // ========================================================================
+        left_frame_id_ = get_parameter("frames.left_frame_id").as_string();
+        right_frame_id_ = get_parameter("frames.right_frame_id").as_string();
+        base_frame_id_ = get_parameter("frames.base_frame_id").as_string();
         
-        // Stereo configuration
-        stereo_config_.num_disparities = get_parameter("num_disparities").as_int();
-        stereo_config_.block_size = get_parameter("block_size").as_int();
-        stereo_config_.min_disparity = get_parameter("min_disparity").as_int();
+        // ========================================================================
+        // STEREO CONFIGURATION
+        // ========================================================================
+        stereo_config_.num_disparities = get_parameter("stereo.num_disparities").as_int();
+        stereo_config_.block_size = get_parameter("stereo.block_size").as_int();
+        stereo_config_.min_disparity = get_parameter("stereo.min_disparity").as_int();
         stereo_config_.max_disparity = stereo_config_.num_disparities;
-        stereo_config_.uniqueness_ratio = get_parameter("uniqueness_ratio").as_int();
-        stereo_config_.speckle_window_size = get_parameter("speckle_window_size").as_int();
-        stereo_config_.speckle_range = get_parameter("speckle_range").as_int();
-        stereo_config_.disp12_max_diff = get_parameter("disp12_max_diff").as_int();
-        stereo_config_.use_gpu = get_parameter("use_gpu").as_bool();
+        stereo_config_.uniqueness_ratio = get_parameter("stereo.uniqueness_ratio").as_int();
+        stereo_config_.speckle_window_size = get_parameter("stereo.speckle_window_size").as_int();
+        stereo_config_.speckle_range = get_parameter("stereo.speckle_range").as_int();
+        stereo_config_.disp12_max_diff = get_parameter("stereo.disp12_max_diff").as_int();
+        stereo_config_.use_gpu = get_parameter("stereo.use_gpu").as_bool();
         
-        // Point cloud configuration
-        pointcloud_config_.enable_voxel_filter = get_parameter("voxel_filter_enable").as_bool();
-        pointcloud_config_.voxel_leaf_size = get_parameter("voxel_leaf_size").as_double();
-        pointcloud_config_.enable_statistical_filter = get_parameter("statistical_filter_enable").as_bool();
-        pointcloud_config_.statistical_filter_k = get_parameter("statistical_filter_k").as_int();
-        pointcloud_config_.statistical_filter_stddev = get_parameter("statistical_filter_stddev").as_double();
-        pointcloud_config_.enable_range_filter = get_parameter("range_filter_enable").as_bool();
-        pointcloud_config_.min_range = get_parameter("min_range").as_double();
-        pointcloud_config_.max_range = get_parameter("max_range").as_double();
-        pointcloud_config_.max_threads = get_parameter("max_processing_threads").as_int();
-        pointcloud_config_.downsample_factor = get_parameter("downsample_factor").as_int();
+        // ========================================================================
+        // POINT CLOUD CONFIGURATION
+        // ========================================================================
+        pointcloud_config_.enable_voxel_filter = get_parameter("pointcloud.voxel_filter.enable").as_bool();
+        pointcloud_config_.voxel_leaf_size = get_parameter("pointcloud.voxel_filter.leaf_size").as_double();
+        pointcloud_config_.enable_statistical_filter = get_parameter("pointcloud.statistical_filter.enable").as_bool();
+        pointcloud_config_.statistical_filter_k = get_parameter("pointcloud.statistical_filter.k_neighbors").as_int();
+        pointcloud_config_.statistical_filter_stddev = get_parameter("pointcloud.statistical_filter.stddev_threshold").as_double();
+        pointcloud_config_.enable_range_filter = get_parameter("pointcloud.range_filter.enable").as_bool();
+        pointcloud_config_.min_range = get_parameter("pointcloud.range_filter.min_range").as_double();
+        pointcloud_config_.max_range = get_parameter("pointcloud.range_filter.max_range").as_double();
+        pointcloud_config_.max_threads = get_parameter("pointcloud.max_processing_threads").as_int();
+        pointcloud_config_.downsample_factor = get_parameter("pointcloud.downsample_factor").as_int();
         
-        // Publishing flags
-        publish_raw_images_ = get_parameter("publish_raw_images").as_bool();
-        publish_rectified_images_ = get_parameter("publish_rectified_images").as_bool();
-        publish_disparity_ = get_parameter("publish_disparity").as_bool();
-        publish_pointcloud_ = get_parameter("publish_pointcloud").as_bool();
+        // ========================================================================
+        // PUBLISHING FLAGS
+        // ========================================================================
+        publish_raw_images_ = get_parameter("publishing.publish_raw_images").as_bool();
+        publish_rectified_images_ = get_parameter("publishing.publish_rectified_images").as_bool();
+        publish_disparity_ = get_parameter("publishing.publish_disparity").as_bool();
+        publish_pointcloud_ = get_parameter("publishing.publish_pointcloud").as_bool();
         
-        // Performance monitoring
-        log_performance_ = get_parameter("log_performance").as_bool();
-        performance_log_interval_ = get_parameter("performance_log_interval").as_int();
+        // ========================================================================
+        // PERFORMANCE MONITORING
+        // ========================================================================
+        log_performance_ = get_parameter("performance.log_performance").as_bool();
+        performance_log_interval_ = get_parameter("performance.performance_log_interval").as_int();
     }
     
     void create_cameras() {
         // Create left camera
         left_camera_ = CameraFactory::create_camera(CameraFactory::CameraType::JETSON_CSI);
-        camera_config_.sensor_id = get_parameter("left_sensor_id").as_int();
+        camera_config_.sensor_id = get_parameter("camera.left_sensor_id").as_int();
         if (!left_camera_->initialize(camera_config_)) {
             throw std::runtime_error("Failed to initialize left camera");
         }
         
         // Create right camera
         right_camera_ = CameraFactory::create_camera(CameraFactory::CameraType::JETSON_CSI);
-        camera_config_.sensor_id = get_parameter("right_sensor_id").as_int();
+        camera_config_.sensor_id = get_parameter("camera.right_sensor_id").as_int();
         if (!right_camera_->initialize(camera_config_)) {
             throw std::runtime_error("Failed to initialize right camera");
         }
         
         RCLCPP_INFO(get_logger(), "Created cameras with resolution %dx%d at %d fps",
-                   camera_config_.width, camera_config_.height, camera_config_.fps);
+                camera_config_.width, camera_config_.height, camera_config_.fps);
     }
     
     void create_stereo_processor() {
-        std::string algorithm = get_parameter("stereo_algorithm").as_string();
+        std::string algorithm = get_parameter("stereo.algorithm").as_string();
         
         StereoProcessingFactory::StrategyType strategy_type;
         if (algorithm == "GPU_BM") {
@@ -312,7 +399,7 @@ private:
             strategy_type = StereoProcessingFactory::StrategyType::CPU_SGBM;
         } else {
             RCLCPP_WARN(get_logger(), "Unknown stereo algorithm: %s, using CPU_BM", algorithm.c_str());
-            strategy_type = StereoProcessingFactory::StrategyType::CPU_BM;  // Changed from GPU_BM to CPU_BM as safer default
+            strategy_type = StereoProcessingFactory::StrategyType::CPU_BM;
         }
         
         stereo_processor_ = StereoProcessingFactory::create_strategy(strategy_type);
@@ -384,10 +471,10 @@ private:
     
     void setup_camera_info_managers() {
         left_info_manager_ = std::make_shared<camera_info_manager::CameraInfoManager>(
-            this, "left", get_parameter("left_camera_info_url").as_string());
+            this, "left", get_parameter("calibration.left_camera_info_url").as_string());
         
         right_info_manager_ = std::make_shared<camera_info_manager::CameraInfoManager>(
-            this, "right", get_parameter("right_camera_info_url").as_string());
+            this, "right", get_parameter("calibration.right_camera_info_url").as_string());
     }
     
     void start_cameras() {
@@ -441,6 +528,18 @@ private:
                 // Get frames from cameras
                 cv::Mat left_frame = left_camera_->get_frame();
                 cv::Mat right_frame = right_camera_->get_frame();
+
+                // Flip both images 180 degrees if enabled
+                if (get_parameter("camera.flip_images_180").as_bool()) {
+                    cv::flip(left_frame, left_frame, -1);   // -1 = 180 degree rotation
+                    cv::flip(right_frame, right_frame, -1);
+}
+
+                // Add this in processing_loop() right after getting frames:
+                RCLCPP_INFO_ONCE(get_logger(), "Left frame - Type: %d, Channels: %d, Depth: %d", 
+                                left_frame.type(), left_frame.channels(), left_frame.depth());
+                RCLCPP_INFO_ONCE(get_logger(), "Right frame - Type: %d, Channels: %d, Depth: %d", 
+                                right_frame.type(), right_frame.channels(), right_frame.depth());
                 
                 if (left_frame.empty() || right_frame.empty()) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -542,8 +641,26 @@ private:
                                                      const cv::Mat& right_rectified,
                                                      const rclcpp::Time& timestamp) {
         
-        // Compute disparity
-        cv::Mat disparity = stereo_processor_->compute_disparity(left_rectified, right_rectified);
+        // Convert to grayscale if needed (CUDA stereo requires single-channel)
+        cv::Mat left_gray, right_gray;
+        
+        if (left_rectified.channels() == 3) {
+            cv::cvtColor(left_rectified, left_gray, cv::COLOR_BGR2GRAY);
+            RCLCPP_DEBUG_ONCE(get_logger(), "Converting left image from BGR to grayscale");
+        } else {
+            left_gray = left_rectified;
+        }
+        
+        if (right_rectified.channels() == 3) {
+            cv::cvtColor(right_rectified, right_gray, cv::COLOR_BGR2GRAY);
+            RCLCPP_DEBUG_ONCE(get_logger(), "Converting right image from BGR to grayscale");
+        } else {
+            right_gray = right_rectified;
+        }
+        
+        // Compute disparity with grayscale images
+        cv::Mat disparity = stereo_processor_->compute_disparity(left_gray, right_gray);
+        
         
         if (disparity.empty()) {
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Failed to compute disparity");
@@ -577,7 +694,7 @@ private:
     }
     
     void publish_disparity_image(const cv::Mat& disparity, const rclcpp::Time& timestamp) {
-        stereo_msgs::msg::DisparityImage disparity_msg;  // Correct type
+        stereo_msgs::msg::DisparityImage disparity_msg;
         
         disparity_msg.header.stamp = timestamp;
         disparity_msg.header.frame_id = left_frame_id_;
@@ -604,7 +721,7 @@ private:
         
         // Fill disparity parameters
         disparity_msg.f = calibration_->get_left_camera_matrix().at<double>(0, 0); // fx
-        disparity_msg.t = get_parameter("default_baseline").as_double(); // baseline
+        disparity_msg.t = get_parameter("calibration.default.baseline").as_double(); // baseline
         disparity_msg.min_disparity = stereo_config_.min_disparity;
         disparity_msg.max_disparity = stereo_config_.min_disparity + stereo_config_.num_disparities;
         disparity_msg.delta_d = 1.0;
@@ -637,7 +754,7 @@ private:
     }
     
     void set_left_camera_info(const std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Request> request,
-                             std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Response> response) {
+                         std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Response> response) {
         
         // Validate camera info
         if (!validate_camera_info(request->camera_info)) {
@@ -653,7 +770,7 @@ private:
             // Update calibration with new camera info
             if (calibration_->from_camera_info_msg(request->camera_info, true)) {
                 // Save calibration to file
-                std::string calib_file = get_parameter("left_camera_info_url").as_string();
+                std::string calib_file = get_parameter("calibration.left_camera_info_url").as_string();
                 if (!calib_file.empty() && calib_file.find("file://") == 0) {
                     std::string file_path = calib_file.substr(7); // Remove "file://" prefix
                     if (calibration_->save_calibration_to_yaml(file_path, request->camera_info)) {
@@ -669,9 +786,9 @@ private:
             response->status_message = "Failed to set left camera info";
         }
     }
-    
+
     void set_right_camera_info(const std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Request> request,
-                              std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Response> response) {
+                            std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Response> response) {
         
         // Validate camera info
         if (!validate_camera_info(request->camera_info)) {
@@ -687,7 +804,7 @@ private:
             // Update calibration with new camera info
             if (calibration_->from_camera_info_msg(request->camera_info, false)) {
                 // Save calibration to file
-                std::string calib_file = get_parameter("right_camera_info_url").as_string();
+                std::string calib_file = get_parameter("calibration.right_camera_info_url").as_string();
                 if (!calib_file.empty() && calib_file.find("file://") == 0) {
                     std::string file_path = calib_file.substr(7); // Remove "file://" prefix
                     if (calibration_->save_calibration_to_yaml(file_path, request->camera_info)) {
@@ -723,7 +840,7 @@ private:
         // Perform stereo calibration using existing camera calibrations
         if (calibration_->calibrate_stereo_from_individual(left_info, right_info)) {
             // Save stereo calibration
-            std::string stereo_calib_file = get_parameter("stereo_calibration_url").as_string();
+            std::string stereo_calib_file = get_parameter("calibration.stereo_calibration_url").as_string();
             if (!stereo_calib_file.empty() && stereo_calib_file.find("file://") == 0) {
                 std::string file_path = stereo_calib_file.substr(7);
                 if (calibration_->save_stereo_calibration(file_path)) {

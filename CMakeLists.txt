@@ -14,12 +14,17 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(stereo_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(cv_bridge REQUIRED)
+find_package(image_transport REQUIRED)
 find_package(camera_info_manager REQUIRED)
 find_package(pcl_conversions REQUIRED)
+find_package(tf2_ros REQUIRED)
+# find_package(yaml-cpp-vendor REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(PCL REQUIRED)
 
@@ -72,12 +77,16 @@ add_executable(camera_node
 # Set target dependencies
 ament_target_dependencies(stereo_camera_node 
   rclcpp
+  std_msgs
   sensor_msgs
   stereo_msgs
+  geometry_msgs
   std_srvs
   cv_bridge
+  image_transport
   camera_info_manager
   pcl_conversions
+  tf2_ros
   OpenCV)
 
 ament_target_dependencies(camera_node 
@@ -131,7 +140,7 @@ install(TARGETS camera_node
 
 # Install launch files
 install(DIRECTORY launch
-  DESTINATION share/${PROJECT_NAME}/
+  DESTINATION share/${PROJECT_NAME}/launch
 )
 
 # Install header files
@@ -142,6 +151,6 @@ install(DIRECTORY include/
 
 # Install config files
 install(DIRECTORY config
-  DESTINATION share/${PROJECT_NAME}/)
+  DESTINATION share/${PROJECT_NAME})
 
 ament_package()

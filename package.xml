@@ -3,18 +3,25 @@
 <package format="3">
   <name>jetank_perception</name>
   <version>1.0.0</version>
-  <description>Perception function for Jetank</description>
+  <description>Perception functions for Jetank</description>
   <maintainer email="gorkom.projects@gmail.com">Koen</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>stereo_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_srvs</depend>
+
   <depend>cv_bridge</depend>
+  <depend>image_transport</depend>
   <depend>camera_info_manager</depend>
+
   <depend>pcl_conversions</depend>
+
   <depend>libopencv-dev</depend>
   <depend>libpcl-dev</depend>
   <depend>libpcl-all-dev</depend>
@@ -26,6 +33,9 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>launch_xml</exec_depend>
   <exec_depend>launch_yaml</exec_depend>
+
+  <exec_depend>tf2_ros</exec_depend>
+  <!-- <depend>yaml-cpp-vendor</depend> -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

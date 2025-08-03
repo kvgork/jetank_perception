@@ -1,5 +1,0 @@
-stereo_algorithm: "GPU_BM"
-num_disparities: 64
-block_size: 15
-min_disparity: 0
-max_disparity: 64
