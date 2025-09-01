@@ -130,7 +130,7 @@ private:
     bool publish_pointcloud_;
     
 public:
-    JetsonStereoNode() : Node("jetson_stereo_node"), processing_active_(false), processing_fps_(0.0) {
+    JetsonStereoNode() : Node("stereo_camera_node"), processing_active_(false), processing_fps_(0.0) {
         // Initialize components
         initialize_parameters();
         // In constructor, right after initialize_parameters():
@@ -179,23 +179,23 @@ private:
         declare_parameter("camera.width", 640);
         declare_parameter("camera.height", 480);
         declare_parameter("camera.fps", 20);
-        // declare_parameter("camera.format", "GRAY8");
-        // declare_parameter("camera.left_sensor_id", 0);
+        declare_parameter("camera.format", "GRAY8");
+        declare_parameter("camera.left_sensor_id", 0);
         declare_parameter("camera.right_sensor_id", 1);
         declare_parameter("camera.use_hardware_acceleration", true);
         declare_parameter("camera.buffer_size", 3);
         declare_parameter("camera.processing_threads", 4);
         declare_parameter("camera.processing_quality", "balanced");
-        // declare_parameter("camera.flip_images_180", false);
-        if (!has_parameter("camera.left_sensor_id")) {
-            declare_parameter("camera.left_sensor_id", 0);
-        }
-        if (!has_parameter("camera.flip_images_180")) {
-            declare_parameter("camera.flip_images_180", false);
-        }
-        if (!has_parameter("camera.format")) {
-            declare_parameter("camera.format", std::string("GRAY8"));
-        }
+        declare_parameter("camera.flip_images_180", false);
+        // if (!has_parameter("camera.left_sensor_id")) {
+        //     declare_parameter("camera.left_sensor_id", 0);
+        // }
+        // if (!has_parameter("camera.flip_images_180")) {
+        //     declare_parameter("camera.flip_images_180", false);
+        // }
+        // if (!has_parameter("camera.format")) {
+        //     declare_parameter("camera.format", std::string("GRAY8"));
+        // }
         
         // ========================================================================
         // FRAME PARAMETERS
@@ -370,6 +370,10 @@ private:
         // Create left camera
         left_camera_ = CameraFactory::create_camera(CameraFactory::CameraType::JETSON_CSI);
         camera_config_.sensor_id = get_parameter("camera.left_sensor_id").as_int();
+        
+        RCLCPP_INFO(get_logger(), "Created left camera id:%d with resolution %dx%d at %d fps, image format: %s, flipped: %d",
+                camera_config_.sensor_id, camera_config_.width, camera_config_.height, camera_config_.fps, camera_config_.format, camera_config_.flip_180);
+        
         if (!left_camera_->initialize(camera_config_)) {
             throw std::runtime_error("Failed to initialize left camera");
         }
@@ -377,6 +381,8 @@ private:
         // Create right camera
         right_camera_ = CameraFactory::create_camera(CameraFactory::CameraType::JETSON_CSI);
         camera_config_.sensor_id = get_parameter("camera.right_sensor_id").as_int();
+        RCLCPP_INFO(get_logger(), "Created right camera id:%d with resolution %dx%d at %d fps, image format: %s, flipped: %d",
+                camera_config_.sensor_id, camera_config_.width, camera_config_.height, camera_config_.fps, camera_config_.format, camera_config_.flip_180);
         if (!right_camera_->initialize(camera_config_)) {
             throw std::runtime_error("Failed to initialize right camera");
         }

@@ -121,7 +121,6 @@ def generate_launch_description():
         package=stereo_package_name,
         executable='stereo_camera_node',
         name='stereo_camera_node',
-        namespace=LaunchConfiguration('namespace'),
         parameters=[
             PathJoinSubstitution([
                 FindPackageShare(stereo_package_name),
