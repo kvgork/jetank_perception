@@ -96,6 +96,29 @@ public:
         std::string pipeline = build_gstreamer_pipeline(config);
         
         cap_.open(pipeline, cv::CAP_GSTREAMER);
+
+        // Test script;
+        if (cap_.isOpened()) {
+            double actual_width = cap_.get(cv::CAP_PROP_FRAME_WIDTH);
+            double actual_height = cap_.get(cv::CAP_PROP_FRAME_HEIGHT);
+            double format = cap_.get(cv::CAP_PROP_FORMAT);
+            
+            std::cout << "=== DETAILED CAMERA DEBUG ===" << std::endl;
+            std::cout << "Requested: " << config.width << "x" << config.height << std::endl;
+            std::cout << "Actual: " << actual_width << "x" << actual_height << std::endl;
+            std::cout << "Format code: " << format << std::endl;
+            std::cout << "Pipeline used: " << pipeline << std::endl;
+            
+            // Test frame to see actual dimensions
+            cv::Mat test_frame;
+            cap_ >> test_frame;
+            if (!test_frame.empty()) {
+                std::cout << "Actual frame size: " << test_frame.cols << "x" << test_frame.rows << std::endl;
+                std::cout << "Frame channels: " << test_frame.channels() << std::endl;
+                std::cout << "Frame type: " << test_frame.type() << std::endl;
+            }
+            std::cout << "=============================" << std::endl;
+        }
         
         if (!cap_.isOpened()) {
             std::cerr << "Failed to open CSI camera with pipeline: " << pipeline << std::endl;
@@ -160,7 +183,17 @@ public:
         } else {
             cap_ >> frame;
         }
-        
+
+        // Debug: Log actual frame dimensions
+        if (!frame.empty()) {
+            static bool logged = false;
+            if (!logged) {
+                std::cout << "Actual frame received: " << frame.cols << "x" << frame.rows 
+                        << ", channels: " << frame.channels() << std::endl;
+                logged = true;
+            }
+        }
+
         return frame;
     }
 
@@ -266,49 +299,118 @@ private:
         return fallback;
     }
     
+    // std::vector<PipelineTemplate> get_pipeline_templates() {
+    //     std::vector<PipelineTemplate> templates;
+        
+    //     // High-performance, hardware-accelerated
+    //     templates.push_back({
+    //         "HW_Accelerated_BGRx",
+    //         "nvarguscamerasrc sensor-id=%d ! video/x-raw(memory:NVMM), width=%d, height=%d, format=%s, framerate=%d/1 ! nvvidconv ! video/x-raw, format=BGRx ! videoconvert ! video/x-raw, format=BGR ! appsink",
+    //         "Hardware accelerated with NVMM memory",
+    //         1
+    //     });
+        
+    //     // Simple hardware-accelerated
+    //     templates.push_back({
+    //         "HW_Accelerated_Auto",
+    //         "nvarguscamerasrc sensor-id=%d ! nvvidconv ! video/x-raw, width=%d, height=%d ! videoconvert ! video/x-raw, format=BGR ! appsink",
+    //         "Hardware accelerated with auto format",
+    //         2
+    //     });
+        
+    //     // Software fallback
+    //     templates.push_back({
+    //         "Software_Fallback",
+    //         "nvarguscamerasrc sensor-id=%d ! videoconvert ! video/x-raw, width=%d, height=%d, format=BGR ! appsink",
+    //         "Software-only conversion",
+    //         3
+    //     });
+        
+    //     return templates;
+    // }
     std::vector<PipelineTemplate> get_pipeline_templates() {
         std::vector<PipelineTemplate> templates;
         
-        // High-performance, hardware-accelerated
-        templates.push_back({
-            "HW_Accelerated_BGRx",
-            "nvarguscamerasrc sensor-id=%d ! video/x-raw(memory:NVMM), width=%d, height=%d, format=%s, framerate=%d/1 ! nvvidconv ! video/x-raw, format=BGRx ! videoconvert ! video/x-raw, format=BGR ! appsink",
-            "Hardware accelerated with NVMM memory",
-            1
-        });
+        // Force full sensor readout, no dimension specification to nvarguscamerasrc
+        // templates.push_back({
+        //     "Full_Sensor_No_Crop",
+        //     "nvarguscamerasrc sensor-id=%d ! nvvidconv ! videoconvert ! video/x-raw, format=BGRx ! appsink",
+        //     "Full sensor without cropping",
+        //     1
+        // });
         
-        // Simple hardware-accelerated
-        templates.push_back({
-            "HW_Accelerated_Auto",
-            "nvarguscamerasrc sensor-id=%d ! nvvidconv ! video/x-raw, width=%d, height=%d ! videoconvert ! video/x-raw, format=BGR ! appsink",
-            "Hardware accelerated with auto format",
-            2
-        });
+        // // If that doesn't work, try explicitly requesting 1920x1080
+        // templates.push_back({
+        //     "Explicit_1080p",
+        //     "nvarguscamerasrc sensor-id=%d ! video/x-raw, width=1920, height=1080 ! nvvidconv ! videoconvert ! video/x-raw, format=BGR ! appsink",
+        //     "Explicit 1080p request",
+        //     2
+        // });
         
-        // Software fallback
+        // // Your working but cropping pipeline
+        // templates.push_back({
+        //     "Working_Cropped",
+        //     "nvarguscamerasrc sensor-id=%d ! nvvidconv ! video/x-raw, width=640, height=480 ! videoconvert ! video/x-raw, format=BGR ! appsink",
+        //     "Working cropped pipeline",
+        //     3
+        // });
+
+        // Test
+        // templates.push_back({
+        //     "Test",
+        //     "nvarguscamerasrc sensor-id=%d ! video/x-raw(memory:NVMM) ! nvvidconv ! video/x-raw, format=BGRx ! videoconvert  ! appsink",
+        //     "Test pipeline",
+        //     4
+        // });
+
+        // templates.push_back({
+        //     "Test2",
+        //     "nvarguscamerasrc sensor-id=%d ! video/x-raw(memory:NVMM),width=3280,height=2464,format=NV12,framerate=15/1 ! nvvidconv ! video/x-raw,width=640,height=360,format=BGRx ! videoconvert ! appsink",
+        //     "Test2 pipeline",
+        //     5
+        // });
+
         templates.push_back({
-            "Software_Fallback",
-            "nvarguscamerasrc sensor-id=%d ! videoconvert ! video/x-raw, width=%d, height=%d, format=BGR ! appsink",
-            "Software-only conversion",
-            3
+            "Scaled_Output",
+            "nvarguscamerasrc sensor-id=%d ! video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=30/1 ! nvvidconv ! video/x-raw,width=%d,height=%d,format=BGRx ! videoconvert ! appsink",
+            "Sensor with hardware scaling",
+            6
         });
         
         return templates;
     }
     
+    // std::string build_pipeline_from_template(const PipelineTemplate& template_config, 
+    //                                        const CameraConfig& config) {
+    //     char pipeline_buffer[1024];
+        
+    //     if (template_config.name == "HW_Accelerated_BGRx") {
+    //         snprintf(pipeline_buffer, sizeof(pipeline_buffer), 
+    //                  template_config.template_str.c_str(),
+    //                  config.sensor_id, config.width, config.height, 
+    //                  config.format.c_str(), config.fps);
+    //     } else {
+    //         snprintf(pipeline_buffer, sizeof(pipeline_buffer), 
+    //                  template_config.template_str.c_str(),
+    //                  config.sensor_id, config.width, config.height);
+    //     }
+        
+    //     return std::string(pipeline_buffer);
+    // }
+
     std::string build_pipeline_from_template(const PipelineTemplate& template_config, 
-                                           const CameraConfig& config) {
+                                        const CameraConfig& config) {
         char pipeline_buffer[1024];
         
-        if (template_config.name == "HW_Accelerated_BGRx") {
+        if (template_config.name == "Scaled_Output") {
             snprintf(pipeline_buffer, sizeof(pipeline_buffer), 
-                     template_config.template_str.c_str(),
-                     config.sensor_id, config.width, config.height, 
-                     config.format.c_str(), config.fps);
+                    template_config.template_str.c_str(),
+                    config.sensor_id, config.width, config.height);
         } else {
+            // Other templates
             snprintf(pipeline_buffer, sizeof(pipeline_buffer), 
-                     template_config.template_str.c_str(),
-                     config.sensor_id, config.width, config.height);
+                    template_config.template_str.c_str(),
+                    config.sensor_id);
         }
         
         return std::string(pipeline_buffer);

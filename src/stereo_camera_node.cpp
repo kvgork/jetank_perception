@@ -590,8 +590,8 @@ private:
         
         // Publish raw images first (for calibration)
         if (publish_raw_images_) {
-            publish_image(left_image_pub_, left_frame, left_frame_id_, timestamp, "mono8");
-            publish_image(right_image_pub_, right_frame, right_frame_id_, timestamp, "mono8");
+            publish_image(left_image_pub_, left_frame, left_frame_id_, timestamp, "bgr8");
+            publish_image(right_image_pub_, right_frame, right_frame_id_, timestamp, "bgr8");
         }
         
         // Publish camera info
