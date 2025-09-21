@@ -1,0 +1,50 @@
+image_width: 640
+image_height: 360
+calibration_type: "stereo"
+
+# Rotation matrix between left and right cameras (3x3)
+# Based on rectification matrices from individual cameras
+rotation_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         0.0, 0.0, 1.0]
+
+# Translation vector between cameras (3x1)
+# Baseline distance extracted from projection matrices: -39.57201 / 631.56285 = -0.06267
+translation_vector:
+  rows: 3
+  cols: 1
+  data: [-0.06267, 0.0, 0.0]
+
+# Q matrix for 3D reconstruction (4x4)
+# Computed from stereo calibration parameters
+Q_matrix:
+  rows: 4
+  cols: 4
+  data: [1.0, 0.0, 0.0, -347.17829,
+         0.0, 1.0, 0.0, -176.39605,
+         0.0, 0.0, 0.0,  631.56285,
+         0.0, 0.0, 15.94503, 0.0]
+
+# Essential matrix (3x3) - optional
+essential_matrix:
+  rows: 3
+  cols: 3
+  data: [0.0, 0.0, 0.0,
+         0.0, 0.0, -0.06267,
+         0.0, 0.06267, 0.0]
+
+# Fundamental matrix (3x3) - optional
+fundamental_matrix:
+  rows: 3
+  cols: 3
+  data: [0.0, 0.0, 0.0,
+         0.0, 0.0, -1.0,
+         0.0, 1.0, 0.0]
+
+# Metadata
+calibration_date: "2025-09-21T15:12:48Z"
+calibration_version: "1.0"
+baseline: 0.06267

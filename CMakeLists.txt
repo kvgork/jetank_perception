@@ -140,7 +140,7 @@ install(TARGETS camera_node
 
 # Install launch files
 install(DIRECTORY launch
-  DESTINATION share/${PROJECT_NAME}/launch
+  DESTINATION share/${PROJECT_NAME}
 )
 
 # Install header files
