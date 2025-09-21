@@ -17,6 +17,12 @@ def generate_launch_description():
     
     # Get package share directory
     pkg_share = FindPackageShare(package=stereo_package_name).find(stereo_package_name)
+
+    # Build calibration file URLs
+    calibration_dir = os.path.join(pkg_share, 'config', 'calibration')
+    left_camera_url = f"file://{os.path.join(calibration_dir, 'left_camera.yaml')}"
+    right_camera_url = f"file://{os.path.join(calibration_dir, 'right_camera.yaml')}"
+    stereo_calibration_url = f"file://{os.path.join(calibration_dir, 'stereo_calibration.yaml')}"
     
     # ============================================================================
     # LAUNCH ARGUMENTS (for runtime overrides)
@@ -131,6 +137,10 @@ def generate_launch_description():
             # Direct parameter overrides for key runtime settings
             {
                 'calibration.transforms.publish_camera_transforms': LaunchConfiguration('publish_camera_transforms'),
+                # Override calibration file paths with resolved absolute file URLs
+                'calibration.left_camera_info_url': left_camera_url,
+                'calibration.right_camera_info_url': right_camera_url,
+                'calibration.stereo_calibration_url': stereo_calibration_url,
             }
         ],
         output='screen',
