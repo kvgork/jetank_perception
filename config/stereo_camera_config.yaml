@@ -110,3 +110,39 @@ stereo_camera:
       development.max_frame_age_ms: 100
       development.auto_restart_on_error: true
       development.max_consecutive_errors: 5
+
+      # ============================================================================
+      # QUALITY MONITORING CONFIGURATION
+      # ============================================================================
+
+      # Master enable/disable for all quality monitoring
+      quality_monitoring.enable: false
+
+      # Metrics computation (lightweight)
+      quality_monitoring.compute_metrics.enable: false
+      quality_monitoring.compute_metrics.log_interval: 100  # Log every N frames
+      quality_monitoring.compute_metrics.publish_to_topic: false  # Publish metrics to ROS topic
+
+      # Quality metrics to compute
+      quality_monitoring.metrics.density: true          # Point density calculation
+      quality_monitoring.metrics.completeness: true     # Coverage/hole detection
+      quality_monitoring.metrics.noise_level: true      # Standard deviation, outliers
+      quality_monitoring.metrics.temporal_stability: false  # Frame-to-frame comparison (more expensive)
+      quality_monitoring.metrics.reprojection_error: false  # Calibration quality (expensive)
+
+      # Diagnostic visualization (expensive - for debugging only)
+      quality_monitoring.visualization.enable: false
+      quality_monitoring.visualization.publish_disparity_colored: false  # Color-coded disparity quality
+      quality_monitoring.visualization.publish_depth_uncertainty: false  # Depth confidence heatmap
+      quality_monitoring.visualization.publish_density_map: false        # Point density visualization
+      quality_monitoring.visualization.publish_epipolar_overlay: false   # Rectification quality check
+
+      # Calibration quality validation
+      quality_monitoring.calibration_validation.enable: false
+      quality_monitoring.calibration_validation.validate_on_startup: true
+      quality_monitoring.calibration_validation.log_rectification_quality: false
+
+      # Performance thresholds (warnings if quality drops)
+      quality_monitoring.thresholds.min_point_density: 0.3          # Minimum acceptable density (0-1)
+      quality_monitoring.thresholds.max_noise_ratio: 0.2            # Maximum outlier ratio
+      quality_monitoring.thresholds.min_disparity_coverage: 0.5     # Minimum valid disparity pixels
