@@ -1,0 +1,42 @@
+# ROS2 build artifacts
+build/
+install/
+log/
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.so.*
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Calibration data (keep templates, ignore captures)
+config/calibration/*_capture_*.yaml
+config/calibration/calib_*.yaml
+
+# Debug images
+debug_images/
+*.png
+*.jpg
+*.jpeg
+
+# Generated files
+*.autosave
+*.user
+
+# Temporary files
+*.tmp
+*.bak
+*~
