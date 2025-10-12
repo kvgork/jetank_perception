@@ -28,20 +28,21 @@ stereo_camera:
 
       # ============================================================================
       # STEREO PROCESSING CONFIGURATION
+      # Optimized for IMX219-83: 60mm baseline, 0.3-1.5m range
       # ============================================================================
       stereo.algorithm: "GPU_BM"
       stereo.use_gpu: true
-      stereo.num_disparities: 64
-      stereo.block_size: 15
-      stereo.min_disparity: 0
-      stereo.uniqueness_ratio: 10
-      stereo.speckle_window_size: 100
-      stereo.speckle_range: 32
-      stereo.disp12_max_diff: 1
-      stereo.pre_filter_cap: 31
-      stereo.pre_filter_size: 9
-      stereo.texture_threshold: 10
-      stereo.smaller_block_size: 0
+      stereo.num_disparities: 80        # Wider search for closer objects (was 64)
+      stereo.block_size: 15             # Smaller for more detail at close range
+      stereo.min_disparity: 0           # Start search from 0
+      stereo.uniqueness_ratio: 15       # Higher = better quality matches (5-25 range)
+      stereo.speckle_window_size: 150   # Remove noise speckles
+      stereo.speckle_range: 16          # More aggressive despeckling
+      stereo.disp12_max_diff: 1         # Left-right consistency check
+      stereo.pre_filter_cap: 63         # Increased for better texture response
+      stereo.pre_filter_size: 9         # Pre-filtering window
+      stereo.texture_threshold: 5       # Lower = less strict on texture (was 10)
+      stereo.smaller_block_size: 0      # Not used in BM
 
       # ============================================================================
       # CALIBRATION CONFIGURATION  
@@ -58,18 +59,19 @@ stereo_camera:
 
       # ============================================================================
       # POINT CLOUD CONFIGURATION
+      # Optimized for 0.3-1.5m working range
       # ============================================================================
       pointcloud.enable: true
       pointcloud.downsample_factor: 1
       pointcloud.max_processing_threads: 4
       pointcloud.voxel_filter.enable: true
-      pointcloud.voxel_filter.leaf_size: 0.01
+      pointcloud.voxel_filter.leaf_size: 0.005        # 5mm voxels for detail at close range
       pointcloud.statistical_filter.enable: true
-      pointcloud.statistical_filter.k_neighbors: 50
-      pointcloud.statistical_filter.stddev_threshold: 1.0
+      pointcloud.statistical_filter.k_neighbors: 30   # Reduced for faster processing
+      pointcloud.statistical_filter.stddev_threshold: 2.0  # More lenient to keep more points
       pointcloud.range_filter.enable: true
-      pointcloud.range_filter.min_range: 0.1
-      pointcloud.range_filter.max_range: 10.0
+      pointcloud.range_filter.min_range: 0.20         # 20cm minimum (experimental - expect more noise)
+      pointcloud.range_filter.max_range: 2.0          # 2m maximum (beyond is unreliable)
       pointcloud.passthrough_filter.enable: false
       pointcloud.passthrough_filter.x_min: -5.0
       pointcloud.passthrough_filter.x_max: 5.0
@@ -116,11 +118,11 @@ stereo_camera:
       # ============================================================================
 
       # Master enable/disable for all quality monitoring
-      quality_monitoring.enable: false
+      quality_monitoring.enable: true
 
       # Metrics computation (lightweight)
-      quality_monitoring.compute_metrics.enable: false
-      quality_monitoring.compute_metrics.log_interval: 100  # Log every N frames
+      quality_monitoring.compute_metrics.enable: true
+      quality_monitoring.compute_metrics.log_interval: 10  # Log every N frames (set to 10 for debugging)
       quality_monitoring.compute_metrics.publish_to_topic: false  # Publish metrics to ROS topic
 
       # Quality metrics to compute
@@ -131,16 +133,16 @@ stereo_camera:
       quality_monitoring.metrics.reprojection_error: false  # Calibration quality (expensive)
 
       # Diagnostic visualization (expensive - for debugging only)
-      quality_monitoring.visualization.enable: false
-      quality_monitoring.visualization.publish_disparity_colored: false  # Color-coded disparity quality
-      quality_monitoring.visualization.publish_depth_uncertainty: false  # Depth confidence heatmap
+      quality_monitoring.visualization.enable: true
+      quality_monitoring.visualization.publish_disparity_colored: true  # Color-coded disparity quality
+      quality_monitoring.visualization.publish_depth_uncertainty: true  # Depth confidence heatmap
       quality_monitoring.visualization.publish_density_map: false        # Point density visualization
       quality_monitoring.visualization.publish_epipolar_overlay: false   # Rectification quality check
 
       # Calibration quality validation
-      quality_monitoring.calibration_validation.enable: false
+      quality_monitoring.calibration_validation.enable: true
       quality_monitoring.calibration_validation.validate_on_startup: true
-      quality_monitoring.calibration_validation.log_rectification_quality: false
+      quality_monitoring.calibration_validation.log_rectification_quality: true
 
       # Performance thresholds (warnings if quality drops)
       quality_monitoring.thresholds.min_point_density: 0.3          # Minimum acceptable density (0-1)

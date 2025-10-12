@@ -11,6 +11,8 @@
 
 #include "jetank_perception/camera_interface.hpp"
 #include "jetank_perception/stereo_processing_strategy.hpp"
+#include "jetank_perception/quality_monitoring.hpp"
+#include "jetank_perception/quality_monitor.hpp"
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/calib3d.hpp>
@@ -111,18 +113,26 @@ private:
     CameraConfig camera_config_;
     StereoConfig stereo_config_;
     PointCloudConfig pointcloud_config_;
-    
+    QualityMonitoringConfig quality_config_;
+
     // Frame IDs
     std::string left_frame_id_;
     std::string right_frame_id_;
     std::string base_frame_id_;
-    
+
     // Performance monitoring
     std::atomic<double> processing_fps_;
     rclcpp::Time last_frame_time_;
     int performance_log_interval_;
     bool log_performance_;
-    
+
+    // Quality monitoring
+    int quality_frame_counter_;
+
+    // Diagnostic publishers (for quality monitoring)
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr disparity_colored_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_uncertainty_pub_;
+
     // Publishing flags
     bool publish_raw_images_;
     bool publish_rectified_images_;
@@ -130,7 +140,7 @@ private:
     bool publish_pointcloud_;
     
 public:
-    JetsonStereoNode() : Node("stereo_camera_node"), processing_active_(false), processing_fps_(0.0) {
+    JetsonStereoNode() : Node("stereo_camera_node"), processing_active_(false), processing_fps_(0.0), quality_frame_counter_(0) {
         // Initialize components
         initialize_parameters();
         // In constructor, right after initialize_parameters():
@@ -299,9 +309,33 @@ private:
         declare_parameter("development.max_frame_age_ms", 100);
         declare_parameter("development.auto_restart_on_error", true);
         declare_parameter("development.max_consecutive_errors", 5);
-        
+
+        // ========================================================================
+        // QUALITY MONITORING PARAMETERS
+        // ========================================================================
+        declare_parameter("quality_monitoring.enable", false);
+        declare_parameter("quality_monitoring.compute_metrics.enable", false);
+        declare_parameter("quality_monitoring.compute_metrics.log_interval", 100);
+        declare_parameter("quality_monitoring.compute_metrics.publish_to_topic", false);
+        declare_parameter("quality_monitoring.metrics.density", true);
+        declare_parameter("quality_monitoring.metrics.completeness", true);
+        declare_parameter("quality_monitoring.metrics.noise_level", true);
+        declare_parameter("quality_monitoring.metrics.temporal_stability", false);
+        declare_parameter("quality_monitoring.metrics.reprojection_error", false);
+        declare_parameter("quality_monitoring.visualization.enable", false);
+        declare_parameter("quality_monitoring.visualization.publish_disparity_colored", false);
+        declare_parameter("quality_monitoring.visualization.publish_depth_uncertainty", false);
+        declare_parameter("quality_monitoring.visualization.publish_density_map", false);
+        declare_parameter("quality_monitoring.visualization.publish_epipolar_overlay", false);
+        declare_parameter("quality_monitoring.calibration_validation.enable", false);
+        declare_parameter("quality_monitoring.calibration_validation.validate_on_startup", true);
+        declare_parameter("quality_monitoring.calibration_validation.log_rectification_quality", false);
+        declare_parameter("quality_monitoring.thresholds.min_point_density", 0.3);
+        declare_parameter("quality_monitoring.thresholds.max_noise_ratio", 0.2);
+        declare_parameter("quality_monitoring.thresholds.min_disparity_coverage", 0.5);
+
         // NOTE: DO NOT declare "use_sim_time" - ROS2 handles this automatically
-        
+
         // Load parameter values
         load_parameters();
     }
@@ -364,6 +398,30 @@ private:
         // ========================================================================
         log_performance_ = get_parameter("performance.log_performance").as_bool();
         performance_log_interval_ = get_parameter("performance.performance_log_interval").as_int();
+
+        // ========================================================================
+        // QUALITY MONITORING
+        // ========================================================================
+        quality_config_.enable = get_parameter("quality_monitoring.enable").as_bool();
+        quality_config_.compute_metrics.enable = get_parameter("quality_monitoring.compute_metrics.enable").as_bool();
+        quality_config_.compute_metrics.log_interval = get_parameter("quality_monitoring.compute_metrics.log_interval").as_int();
+        quality_config_.compute_metrics.publish_to_topic = get_parameter("quality_monitoring.compute_metrics.publish_to_topic").as_bool();
+        quality_config_.metrics.density = get_parameter("quality_monitoring.metrics.density").as_bool();
+        quality_config_.metrics.completeness = get_parameter("quality_monitoring.metrics.completeness").as_bool();
+        quality_config_.metrics.noise_level = get_parameter("quality_monitoring.metrics.noise_level").as_bool();
+        quality_config_.metrics.temporal_stability = get_parameter("quality_monitoring.metrics.temporal_stability").as_bool();
+        quality_config_.metrics.reprojection_error = get_parameter("quality_monitoring.metrics.reprojection_error").as_bool();
+        quality_config_.visualization.enable = get_parameter("quality_monitoring.visualization.enable").as_bool();
+        quality_config_.visualization.publish_disparity_colored = get_parameter("quality_monitoring.visualization.publish_disparity_colored").as_bool();
+        quality_config_.visualization.publish_depth_uncertainty = get_parameter("quality_monitoring.visualization.publish_depth_uncertainty").as_bool();
+        quality_config_.visualization.publish_density_map = get_parameter("quality_monitoring.visualization.publish_density_map").as_bool();
+        quality_config_.visualization.publish_epipolar_overlay = get_parameter("quality_monitoring.visualization.publish_epipolar_overlay").as_bool();
+        quality_config_.calibration_validation.enable = get_parameter("quality_monitoring.calibration_validation.enable").as_bool();
+        quality_config_.calibration_validation.validate_on_startup = get_parameter("quality_monitoring.calibration_validation.validate_on_startup").as_bool();
+        quality_config_.calibration_validation.log_rectification_quality = get_parameter("quality_monitoring.calibration_validation.log_rectification_quality").as_bool();
+        quality_config_.thresholds.min_point_density = get_parameter("quality_monitoring.thresholds.min_point_density").as_double();
+        quality_config_.thresholds.max_noise_ratio = get_parameter("quality_monitoring.thresholds.max_noise_ratio").as_double();
+        quality_config_.thresholds.min_disparity_coverage = get_parameter("quality_monitoring.thresholds.min_disparity_coverage").as_double();
     }
     
     void create_cameras() {
@@ -452,7 +510,17 @@ private:
         if (publish_pointcloud_) {
             pointcloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("points", 10);
         }
-        
+
+        // Quality monitoring diagnostic publishers
+        if (quality_config_.visualization.enable) {
+            if (quality_config_.visualization.publish_disparity_colored) {
+                disparity_colored_pub_ = create_publisher<sensor_msgs::msg::Image>("diagnostics/disparity_colored", 10);
+            }
+            if (quality_config_.visualization.publish_depth_uncertainty) {
+                depth_uncertainty_pub_ = create_publisher<sensor_msgs::msg::Image>("diagnostics/depth_uncertainty", 10);
+            }
+        }
+
         RCLCPP_INFO(get_logger(), "Publishers created with calibration-compatible topic names");
     }
     
@@ -585,24 +653,44 @@ private:
     
     void process_stereo_frames(const cv::Mat& left_frame, const cv::Mat& right_frame) {
         std::lock_guard<std::mutex> lock(processing_mutex_);
-        
+
         rclcpp::Time timestamp = now();
-        
+
+        // Quality monitoring: Analyze raw image quality
+        if (quality_config_.should_compute_any_metrics() &&
+            (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0)) {
+            RCLCPP_INFO(get_logger(), "=== QUALITY MONITORING: Frame %d ===", quality_frame_counter_);
+            RCLCPP_INFO(get_logger(), "--- Stage 1: Raw Image Quality ---");
+            auto left_quality = analyze_image_quality(left_frame);
+            left_quality.log(get_logger(), "Left Camera");
+            auto right_quality = analyze_image_quality(right_frame);
+            right_quality.log(get_logger(), "Right Camera");
+        }
+
         // Publish raw images first (for calibration)
         if (publish_raw_images_) {
             publish_image(left_image_pub_, left_frame, left_frame_id_, timestamp, "bgr8");
             publish_image(right_image_pub_, right_frame, right_frame_id_, timestamp, "bgr8");
         }
-        
+
         // Publish camera info
         publish_camera_info(left_info_pub_, left_info_manager_, left_frame_id_, timestamp);
         publish_camera_info(right_info_pub_, right_info_manager_, right_frame_id_, timestamp);
-        
+
         // Rectify images if calibrated
         cv::Mat left_rectified, right_rectified;
         if (calibration_->is_calibrated()) {
             calibration_->rectify_images(left_frame, right_frame, left_rectified, right_rectified);
-            
+
+            // Quality monitoring: Analyze rectification quality
+            if (quality_config_.should_compute_any_metrics() &&
+                quality_config_.calibration_validation.enable &&
+                (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0)) {
+                RCLCPP_INFO(get_logger(), "--- Stage 2: Rectification Quality ---");
+                auto rect_quality = analyze_rectification_quality(left_rectified, right_rectified);
+                rect_quality.log(get_logger());
+            }
+
             // Publish rectified images
             if (publish_rectified_images_) {
                 publish_image(left_rect_pub_, left_rectified, left_frame_id_, timestamp, "mono8");
@@ -612,11 +700,13 @@ private:
             left_rectified = left_frame;
             right_rectified = right_frame;
         }
-        
+
         // Compute and publish disparity and point cloud
         if (calibration_->is_calibrated()) {
             compute_and_publish_disparity_and_pointcloud(left_rectified, right_rectified, timestamp);
         }
+
+        quality_frame_counter_++;
     }
     
     void publish_image(rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub,
@@ -666,32 +756,103 @@ private:
         
         // Compute disparity with grayscale images
         cv::Mat disparity = stereo_processor_->compute_disparity(left_gray, right_gray);
-        
-        
+
+
         if (disparity.empty()) {
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Failed to compute disparity");
             return;
         }
-        
+
+        // Quality monitoring: Analyze disparity quality
+        if (quality_config_.should_compute_any_metrics() &&
+            (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0)) {
+            RCLCPP_INFO(get_logger(), "--- Stage 3: Disparity Quality ---");
+            auto disp_quality = analyze_disparity_quality(disparity);
+            disp_quality.log(get_logger());
+
+            // Warn if quality is poor
+            if (disp_quality.valid_ratio < quality_config_.thresholds.min_disparity_coverage) {
+                RCLCPP_WARN(get_logger(), "WARNING: Low disparity coverage (%.1f%% < %.1f%% threshold)",
+                           disp_quality.valid_ratio * 100,
+                           quality_config_.thresholds.min_disparity_coverage * 100);
+            }
+        }
+
+        // Visualization: Publish colored disparity
+        if (quality_config_.visualization.enable &&
+            quality_config_.visualization.publish_disparity_colored &&
+            disparity_colored_pub_ && disparity_colored_pub_->get_subscription_count() > 0) {
+            cv::Mat colored = create_disparity_colored(disparity, stereo_config_.min_disparity,
+                                                      stereo_config_.min_disparity + stereo_config_.num_disparities);
+            if (!colored.empty()) {
+                auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", colored).toImageMsg();
+                msg->header.stamp = timestamp;
+                msg->header.frame_id = left_frame_id_;
+                disparity_colored_pub_->publish(*msg);
+            }
+        }
+
+        // Visualization: Publish depth uncertainty
+        if (quality_config_.visualization.enable &&
+            quality_config_.visualization.publish_depth_uncertainty &&
+            depth_uncertainty_pub_ && depth_uncertainty_pub_->get_subscription_count() > 0) {
+            cv::Mat uncertainty = create_depth_uncertainty_map(disparity, calibration_->get_Q_matrix());
+            if (!uncertainty.empty()) {
+                auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", uncertainty).toImageMsg();
+                msg->header.stamp = timestamp;
+                msg->header.frame_id = left_frame_id_;
+                depth_uncertainty_pub_->publish(*msg);
+            }
+        }
+
         // Publish disparity image
         if (publish_disparity_ && disparity_pub_ && disparity_pub_->get_subscription_count() > 0) {
             publish_disparity_image(disparity, timestamp);
         }
-        
+
         // Generate and publish point cloud
         if (publish_pointcloud_ && pointcloud_pub_ && pointcloud_pub_->get_subscription_count() > 0) {
             auto pointcloud = stereo_processor_->generate_pointcloud(disparity, calibration_->get_Q_matrix());
-            
+
             if (pointcloud && !pointcloud->empty()) {
+                // Quality monitoring: Analyze point cloud before filtering
+                if (quality_config_.should_compute_any_metrics() &&
+                    (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0)) {
+                    RCLCPP_INFO(get_logger(), "--- Stage 4: Point Cloud (Before Filtering) ---");
+                    auto pc_quality_before = analyze_pointcloud_quality(pointcloud);
+                    pc_quality_before.log(get_logger(), "BEFORE Filtering");
+                }
+
                 // Apply filters
                 pointcloud_filter_->filter(pointcloud);
-                
+
+                // Quality monitoring: Analyze point cloud after filtering
+                if (quality_config_.should_compute_any_metrics() &&
+                    (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0)) {
+                    RCLCPP_INFO(get_logger(), "--- Stage 5: Point Cloud (After Filtering) ---");
+                    auto pc_quality_after = analyze_pointcloud_quality(pointcloud);
+                    pc_quality_after.log(get_logger(), "AFTER Filtering");
+
+                    // Warn if quality is poor
+                    if (pc_quality_after.density < quality_config_.thresholds.min_point_density) {
+                        RCLCPP_WARN(get_logger(), "WARNING: Low point density (%.1f%% < %.1f%% threshold)",
+                                   pc_quality_after.density * 100,
+                                   quality_config_.thresholds.min_point_density * 100);
+                    }
+                    if (pc_quality_after.outlier_ratio > quality_config_.thresholds.max_noise_ratio) {
+                        RCLCPP_WARN(get_logger(), "WARNING: High noise ratio (%.1f%% > %.1f%% threshold)",
+                                   pc_quality_after.outlier_ratio * 100,
+                                   quality_config_.thresholds.max_noise_ratio * 100);
+                    }
+                    RCLCPP_INFO(get_logger(), "===========================================");
+                }
+
                 // Convert to ROS message and publish
                 sensor_msgs::msg::PointCloud2 pc_msg;
                 pcl::toROSMsg(*pointcloud, pc_msg);
                 pc_msg.header.stamp = timestamp;
                 pc_msg.header.frame_id = left_frame_id_;
-                
+
                 pointcloud_pub_->publish(pc_msg);
             } else {
                 RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Generated empty point cloud");

@@ -68,10 +68,11 @@ if(BUILD_TESTING)
 endif()
 
 # Create executables
-add_executable(stereo_camera_node 
-  src/stereo_camera_node.cpp)
+add_executable(stereo_camera_node
+  src/stereo_camera_node.cpp
+  src/quality_monitor.cpp)
 
-add_executable(camera_node 
+add_executable(camera_node
   src/single_camera.cpp)
 
 # Set target dependencies
