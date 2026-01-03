@@ -4,7 +4,7 @@ import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo, GroupAction
 from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, TextSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, TextSubstitution, PythonExpression
 from launch_ros.actions import Node, LoadComposableNodes
 from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
@@ -169,14 +169,16 @@ def generate_launch_description():
             'base_link',  # parent frame
             'camera_left_link'  # child frame
         ],
-        condition=IfCondition(LaunchConfiguration('publish_camera_transforms'))
+        condition=IfCondition(PythonExpression([
+            "'", LaunchConfiguration('publish_camera_transforms'), "' == 'true'"
+        ]))
     )
     
     # Right camera transform (6cm baseline)
     right_camera_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='right_camera_tf_publisher', 
+        name='right_camera_tf_publisher',
         namespace=LaunchConfiguration('namespace'),
         arguments=[
             '0.06', '0', '0',  # x, y, z (6cm baseline)
@@ -184,7 +186,9 @@ def generate_launch_description():
             'base_link',  # parent frame
             'camera_right_link'  # child frame
         ],
-        condition=IfCondition(LaunchConfiguration('publish_camera_transforms'))
+        condition=IfCondition(PythonExpression([
+            "'", LaunchConfiguration('publish_camera_transforms'), "' == 'true'"
+        ]))
     )
     
     # ============================================================================

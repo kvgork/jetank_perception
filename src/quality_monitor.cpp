@@ -306,9 +306,17 @@ cv::Mat create_disparity_colored(const cv::Mat& disparity, double min_disp, doub
     cv::Mat disparity_normalized;
     cv::Mat valid_mask = disparity_float > 0;
 
-    // Normalize to 0-255
+    // Normalize to 0-255 using specified range
     disparity_float.setTo(0, ~valid_mask);
-    cv::normalize(disparity_float, disparity_normalized, 0, 255, cv::NORM_MINMAX, CV_8U, valid_mask);
+    double range = max_disp - min_disp;
+    if (range > 0) {
+        disparity_normalized = ((disparity_float - min_disp) / range * 255.0);
+        disparity_normalized.setTo(0, disparity_normalized < 0);
+        disparity_normalized.setTo(255, disparity_normalized > 255);
+        disparity_normalized.convertTo(disparity_normalized, CV_8U);
+    } else {
+        cv::normalize(disparity_float, disparity_normalized, 0, 255, cv::NORM_MINMAX, CV_8U, valid_mask);
+    }
 
     // Apply color map
     cv::Mat colored;
