@@ -118,7 +118,7 @@ stereo_camera:
       # ============================================================================
 
       # Master enable/disable for all quality monitoring
-      quality_monitoring.enable: true
+      quality_monitoring.enable: false
 
       # Metrics computation (lightweight)
       quality_monitoring.compute_metrics.enable: true
@@ -126,14 +126,14 @@ stereo_camera:
       quality_monitoring.compute_metrics.publish_to_topic: false  # Publish metrics to ROS topic
 
       # Quality metrics to compute
-      quality_monitoring.metrics.density: true          # Point density calculation
+      quality_monitoring.metrics.density: false          # Point density calculation
       quality_monitoring.metrics.completeness: true     # Coverage/hole detection
-      quality_monitoring.metrics.noise_level: true      # Standard deviation, outliers
+      quality_monitoring.metrics.noise_level: false      # Standard deviation, outliers
       quality_monitoring.metrics.temporal_stability: false  # Frame-to-frame comparison (more expensive)
       quality_monitoring.metrics.reprojection_error: false  # Calibration quality (expensive)
 
       # Diagnostic visualization (expensive - for debugging only)
-      quality_monitoring.visualization.enable: true
+      quality_monitoring.visualization.enable: false
       quality_monitoring.visualization.publish_disparity_colored: true  # Color-coded disparity quality
       quality_monitoring.visualization.publish_depth_uncertainty: true  # Depth confidence heatmap
       quality_monitoring.visualization.publish_density_map: false        # Point density visualization
