@@ -1,5 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <stereo_msgs/msg/disparity_image.hpp>  // Correct header
@@ -99,11 +100,11 @@ private:
     // image_transport for compression support
     std::shared_ptr<image_transport::ImageTransport> image_transport_;
 
-    // Compressed image publishers (separate from raw)
-    image_transport::Publisher left_image_compressed_pub_;
-    image_transport::Publisher right_image_compressed_pub_;
-    image_transport::Publisher left_rect_compressed_pub_;
-    image_transport::Publisher right_rect_compressed_pub_;
+    // Compressed image publishers (actual JPEG/PNG compression)
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr left_image_compressed_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr right_image_compressed_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr left_rect_compressed_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr right_rect_compressed_pub_;
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
     rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr disparity_pub_;  // Correct type
@@ -596,24 +597,24 @@ private:
         left_info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>("left/camera_info", 10);
         right_info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>("right/camera_info", 10);
 
-        // Create image_transport for compressed publishing if enabled
-        if (compression_config_.raw_images.enabled || compression_config_.rectified_images.enabled) {
-            image_transport_ = std::make_shared<image_transport::ImageTransport>(
-                std::shared_ptr<rclcpp::Node>(this, [](auto *){}));
+        // Create compressed image publishers if enabled
+        if (publish_raw_images_ && compression_config_.raw_images.enabled) {
+            left_image_compressed_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(
+                "left/image_raw/compressed", 10);
+            right_image_compressed_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(
+                "right/image_raw/compressed", 10);
+            RCLCPP_INFO(get_logger(), "Created compressed raw image publishers (JPEG quality: %d)",
+                compression_config_.raw_images.jpeg_quality);
+        }
 
-            // Compressed raw image publishers
-            if (publish_raw_images_ && compression_config_.raw_images.enabled) {
-                left_image_compressed_pub_ = image_transport_->advertise("left/image_raw/compressed", 10);
-                right_image_compressed_pub_ = image_transport_->advertise("right/image_raw/compressed", 10);
-                RCLCPP_INFO(get_logger(), "Created compressed raw image publishers");
-            }
-
-            // Compressed rectified image publishers
-            if (publish_rectified_images_ && compression_config_.rectified_images.enabled) {
-                left_rect_compressed_pub_ = image_transport_->advertise("left/image_rect/compressed", 10);
-                right_rect_compressed_pub_ = image_transport_->advertise("right/image_rect/compressed", 10);
-                RCLCPP_INFO(get_logger(), "Created compressed rectified image publishers");
-            }
+        // Compressed rectified image publishers
+        if (publish_rectified_images_ && compression_config_.rectified_images.enabled) {
+            left_rect_compressed_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(
+                "left/image_rect/compressed", 10);
+            right_rect_compressed_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(
+                "right/image_rect/compressed", 10);
+            RCLCPP_INFO(get_logger(), "Created compressed rectified image publishers (JPEG quality: %d)",
+                compression_config_.rectified_images.jpeg_quality);
         }
 
         // Stereo-specific publishers
@@ -782,13 +783,18 @@ private:
             right_quality.log(get_logger(), "Right Camera");
         }
 
-        // Publish raw images first (for calibration)
+        // Publish raw images (respect compression mode)
         if (publish_raw_images_) {
-            publish_image(left_image_pub_, left_frame, left_frame_id_, timestamp, "bgr8");
-            publish_image(right_image_pub_, right_frame, right_frame_id_, timestamp, "bgr8");
+            // Publish raw unless mode is compressed_only
+            if (!compression_config_.raw_images.enabled ||
+                compression_config_.raw_images.mode != "compressed_only") {
+                publish_image(left_image_pub_, left_frame, left_frame_id_, timestamp, "bgr8");
+                publish_image(right_image_pub_, right_frame, right_frame_id_, timestamp, "bgr8");
+            }
 
-            // Publish compressed versions if enabled
-            if (compression_config_.raw_images.enabled) {
+            // Publish compressed unless mode is raw_only
+            if (compression_config_.raw_images.enabled &&
+                compression_config_.raw_images.mode != "raw_only") {
                 publish_compressed_image(left_image_compressed_pub_, left_frame,
                                         left_frame_id_, timestamp, "bgr8",
                                         compression_config_.raw_images);
@@ -816,13 +822,18 @@ private:
                 rect_quality.log(get_logger());
             }
 
-            // Publish rectified images
+            // Publish rectified images (respect compression mode)
             if (publish_rectified_images_) {
-                publish_image(left_rect_pub_, left_rectified, left_frame_id_, timestamp, "mono8");
-                publish_image(right_rect_pub_, right_rectified, right_frame_id_, timestamp, "mono8");
+                // Publish raw unless mode is compressed_only
+                if (!compression_config_.rectified_images.enabled ||
+                    compression_config_.rectified_images.mode != "compressed_only") {
+                    publish_image(left_rect_pub_, left_rectified, left_frame_id_, timestamp, "mono8");
+                    publish_image(right_rect_pub_, right_rectified, right_frame_id_, timestamp, "mono8");
+                }
 
-                // Publish compressed versions if enabled
-                if (compression_config_.rectified_images.enabled) {
+                // Publish compressed unless mode is raw_only
+                if (compression_config_.rectified_images.enabled &&
+                    compression_config_.rectified_images.mode != "raw_only") {
                     publish_compressed_image(left_rect_compressed_pub_, left_rectified,
                                             left_frame_id_, timestamp, "mono8",
                                             compression_config_.rectified_images);
@@ -868,22 +879,34 @@ private:
         pub->publish(*info_msg);
     }
 
-    void publish_compressed_image(image_transport::Publisher& pub,
-                                  const cv::Mat& image,
-                                  const std::string& frame_id,
-                                  const rclcpp::Time& timestamp,
-                                  const std::string& encoding,
-                                  const CompressionConfig& compression_config) {
+    void publish_compressed_image(
+            rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr& pub,
+            const cv::Mat& image,
+            const std::string& frame_id,
+            const rclcpp::Time& timestamp,
+            const std::string& encoding,
+            const CompressionConfig& compression_config) {
 
-        if (pub.getNumSubscribers() == 0) return;
+        if (!pub || pub->get_subscription_count() == 0) return;
 
-        // Convert to ROS message
-        auto image_msg = cv_bridge::CvImage(std_msgs::msg::Header(), encoding, image).toImageMsg();
-        image_msg->header.stamp = timestamp;
-        image_msg->header.frame_id = frame_id;
+        auto compressed_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+        compressed_msg->header.stamp = timestamp;
+        compressed_msg->header.frame_id = frame_id;
 
-        // Publish compressed image
-        pub.publish(*image_msg);
+        // Compress based on format
+        std::vector<uchar> buffer;
+        if (compression_config.format == "jpeg") {
+            compressed_msg->format = "jpeg";
+            std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, compression_config.jpeg_quality};
+            cv::imencode(".jpg", image, buffer, params);
+        } else {
+            compressed_msg->format = "png";
+            std::vector<int> params = {cv::IMWRITE_PNG_COMPRESSION, compression_config.png_level};
+            cv::imencode(".png", image, buffer, params);
+        }
+
+        compressed_msg->data = std::move(buffer);
+        pub->publish(std::move(compressed_msg));
     }
 
     void compute_and_publish_disparity_and_pointcloud(const cv::Mat& left_rectified, 

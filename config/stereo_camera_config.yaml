@@ -90,15 +90,15 @@ stereo_camera:
       publishing.qos_depth: 10
 
       # Compression configuration for raw images
-      publishing.raw_images.compression.enabled: false
-      publishing.raw_images.compression.mode: "both"
+      publishing.raw_images.compression.enabled: true
+      publishing.raw_images.compression.mode: "compressed_only"
       publishing.raw_images.compression.format: "jpeg"
       publishing.raw_images.compression.jpeg_quality: 80
       publishing.raw_images.compression.png_level: 3
 
       # Compression configuration for rectified images
-      publishing.rectified_images.compression.enabled: false
-      publishing.rectified_images.compression.mode: "both"
+      publishing.rectified_images.compression.enabled: true
+      publishing.rectified_images.compression.mode: "compressed_only"
       publishing.rectified_images.compression.format: "jpeg"
       publishing.rectified_images.compression.jpeg_quality: 85
       publishing.rectified_images.compression.png_level: 3
