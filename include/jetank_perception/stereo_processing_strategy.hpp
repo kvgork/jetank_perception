@@ -153,13 +153,13 @@ public:
             
             // Compute disparity on GPU
             stereo_matcher_->compute(left_gpu_, right_gpu_, disparity_gpu_, stream_);
-            
+
+            // Wait for GPU operations to complete before downloading
+            stream_.waitForCompletion();
+
             // Download result from GPU
             cv::Mat disparity;
             disparity_gpu_.download(disparity);
-            
-            // Wait for GPU operations to complete
-            stream_.waitForCompletion();
             
             auto end = std::chrono::high_resolution_clock::now();
             last_processing_time_ = std::chrono::duration<double, std::milli>(end - start).count();
