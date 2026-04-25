@@ -617,12 +617,12 @@ private:
                 compression_config_.rectified_images.jpeg_quality);
         }
 
-        // Stereo-specific publishers
+        // Stereo-specific publishers with shallow queue — large messages, drop stale frames
         if (publish_disparity_) {
-            disparity_pub_ = create_publisher<stereo_msgs::msg::DisparityImage>("disparity", 10);
+            disparity_pub_ = create_publisher<stereo_msgs::msg::DisparityImage>("disparity", 1);
         }
         if (publish_pointcloud_) {
-            pointcloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("points", 10);
+            pointcloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("points", 1);
         }
 
         // Quality monitoring diagnostic publishers
@@ -909,10 +909,9 @@ private:
         pub->publish(std::move(compressed_msg));
     }
 
-    void compute_and_publish_disparity_and_pointcloud(const cv::Mat& left_rectified, 
+    void compute_and_publish_disparity_and_pointcloud(const cv::Mat& left_rectified,
                                                      const cv::Mat& right_rectified,
                                                      const rclcpp::Time& timestamp) {
-        
         // Convert to grayscale if needed (CUDA stereo requires single-channel)
         cv::Mat left_gray, right_gray;
         
