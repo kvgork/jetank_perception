@@ -65,6 +65,14 @@ if(BUILD_TESTING)
   # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  # Pure-logic unit tests (no camera/GPU/ROS graph required)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_stereo_math test/test_stereo_math.cpp)
+  if(TARGET test_stereo_math)
+    target_include_directories(test_stereo_math PRIVATE include ${PCL_INCLUDE_DIRS})
+    target_link_libraries(test_stereo_math ${OpenCV_LIBS} ${PCL_LIBRARIES})
+  endif()
 endif()
 
 # Create executables
@@ -76,7 +84,7 @@ add_executable(camera_node
   src/single_camera.cpp)
 
 # Set target dependencies
-ament_target_dependencies(stereo_camera_node 
+ament_target_dependencies(stereo_camera_node
   rclcpp
   std_msgs
   sensor_msgs
@@ -90,7 +98,7 @@ ament_target_dependencies(stereo_camera_node
   tf2_ros
   OpenCV)
 
-ament_target_dependencies(camera_node 
+ament_target_dependencies(camera_node
   rclcpp
   sensor_msgs
   stereo_msgs
