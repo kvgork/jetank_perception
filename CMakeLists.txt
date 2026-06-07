@@ -22,6 +22,7 @@ find_package(std_srvs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(camera_info_manager REQUIRED)
+find_package(message_filters REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(tf2_ros REQUIRED)
 # find_package(yaml-cpp-vendor REQUIRED)
@@ -94,6 +95,7 @@ ament_target_dependencies(stereo_camera_node
   cv_bridge
   image_transport
   camera_info_manager
+  message_filters
   pcl_conversions
   tf2_ros
   OpenCV)
