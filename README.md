@@ -97,3 +97,18 @@ Neither node subscribes to any topics.
 | `stereo_camera.launch.py` | `stereo_camera_node` (namespace `stereo_camera`) + optional static TF publishers for `camera_left_link` / `camera_right_link`. |
 | `single_camera.launch.py` | `camera_node` (configurable name/namespace) + optional RViz2 and image_view. |
 | `simple_camera.launch.py` | `camera_node` with fixed defaults for quick testing. |
+
+## Tests
+
+GTest unit tests for the pure stereo/quality math in the headers — no camera, GPU, or ROS graph required.
+
+| Test file | Imports | Asserts |
+|---|---|---|
+| `test/test_stereo_math.cpp` | `quality_monitoring.hpp`, `stereo_processing_strategy.hpp` | `QualityMonitoringConfig` gating (`should_compute_any_metrics`/`should_visualize` need both master + sub switch) and `validate()` rejecting out-of-range thresholds and a non-positive log interval. `StereoProcessingStrategy::get_processing_stats()` FPS math (0 ms → 0 fps, 20 ms → 50 fps). `StereoProcessingFactory` returns non-null for every strategy type, and the strategy classes report their expected `get_strategy_name()`. `StereoConfig` defaults match the documented hardware values (`num_disparities=64`, `block_size=15`, `min_disparity=0`, `use_gpu=true`). |
+
+Build and run via colcon:
+
+```bash
+colcon test --packages-select jetank_perception
+colcon test-result --verbose
+```
