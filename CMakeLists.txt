@@ -14,6 +14,8 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(jetank_detection REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(stereo_msgs REQUIRED)
@@ -84,6 +86,10 @@ add_executable(stereo_camera_node
 add_executable(camera_node
   src/single_camera.cpp)
 
+# STUB SegmentSocks action server (Phase 3 fills in the real reprojection logic)
+add_executable(sock_segmentation_server
+  src/sock_segmentation_server.cpp)
+
 # Set target dependencies
 ament_target_dependencies(stereo_camera_node
   rclcpp
@@ -109,6 +115,13 @@ ament_target_dependencies(camera_node
   camera_info_manager
   pcl_conversions
   OpenCV)
+
+ament_target_dependencies(sock_segmentation_server
+  rclcpp
+  rclcpp_action
+  jetank_detection)
+
+target_compile_features(sock_segmentation_server PUBLIC cxx_std_17)
 
 # Configure stereo_camera_node
 target_include_directories(stereo_camera_node PUBLIC
@@ -147,6 +160,9 @@ install(TARGETS stereo_camera_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS camera_node
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS sock_segmentation_server
   DESTINATION lib/${PROJECT_NAME})
 
 # Install launch files
