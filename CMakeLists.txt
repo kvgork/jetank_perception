@@ -26,7 +26,11 @@ find_package(image_transport REQUIRED)
 find_package(camera_info_manager REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(pcl_conversions REQUIRED)
+find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(tf2_sensor_msgs REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(vision_msgs REQUIRED)
 # find_package(yaml-cpp-vendor REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(PCL REQUIRED)
@@ -76,6 +80,17 @@ if(BUILD_TESTING)
     target_include_directories(test_stereo_math PRIVATE include ${PCL_INCLUDE_DIRS})
     target_link_libraries(test_stereo_math ${OpenCV_LIBS} ${PCL_LIBRARIES})
   endif()
+
+  # Pure reprojection-math test (no ROS graph / camera / GPU / TF).
+  ament_add_gtest(test_reproject test/test_reproject.cpp)
+  if(TARGET test_reproject)
+    target_include_directories(test_reproject PRIVATE include ${PCL_INCLUDE_DIRS})
+    target_link_libraries(test_reproject ${PCL_LIBRARIES})
+    ament_target_dependencies(test_reproject
+      sensor_msgs
+      stereo_msgs
+      pcl_conversions)
+  endif()
 endif()
 
 # Create executables
@@ -119,7 +134,23 @@ ament_target_dependencies(camera_node
 ament_target_dependencies(sock_segmentation_server
   rclcpp
   rclcpp_action
-  jetank_detection)
+  jetank_detection
+  sensor_msgs
+  stereo_msgs
+  geometry_msgs
+  vision_msgs
+  tf2
+  tf2_ros
+  tf2_sensor_msgs
+  tf2_geometry_msgs
+  pcl_conversions)
+
+target_include_directories(sock_segmentation_server PRIVATE
+  include
+  ${PCL_INCLUDE_DIRS})
+
+target_link_libraries(sock_segmentation_server
+  ${PCL_LIBRARIES})
 
 target_compile_features(sock_segmentation_server PUBLIC cxx_std_17)
 
