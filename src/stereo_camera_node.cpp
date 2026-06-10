@@ -10,6 +10,9 @@
 #include <camera_info_manager/camera_info_manager.hpp>
 #include <image_transport/image_transport.hpp>
 #include <image_transport/camera_publisher.hpp>
+#include <message_filters/subscriber.h>
+#include <message_filters/synchronizer.h>
+#include <message_filters/sync_policies/approximate_time.h>
 #include <pcl_conversions/pcl_conversions.h>
 
 #include "jetank_perception/camera_interface.hpp"
@@ -73,6 +76,13 @@ public:
     const sensor_msgs::msg::CameraInfo & right_info);
   bool save_stereo_calibration(const std::string & yaml_file_path);
 
+  // Build calibration directly from a pair of already-rectified (ideal pinhole)
+  // CameraInfo messages, as produced by Gazebo. Uses the projection matrices to
+  // construct the reprojection Q and sets identity rectification (passthrough).
+  bool from_rectified_camera_info_pair(
+    const sensor_msgs::msg::CameraInfo & left_info,
+    const sensor_msgs::msg::CameraInfo & right_info);
+
 private:
   bool calibrated_ = false;
   cv::Mat camera_matrix_left_, camera_matrix_right_;
@@ -131,6 +141,22 @@ private:
   std::unique_ptr<std::thread> processing_thread_;
   std::atomic<bool> processing_active_;
   std::mutex processing_mutex_;
+
+  // ROS-topic input mode (simulation): subscribe to stereo image stream instead
+  // of capturing from CSI cameras.
+  std::string input_source_;
+  using ImageMsg = sensor_msgs::msg::Image;
+  using SyncPolicy = message_filters::sync_policies::ApproximateTime<ImageMsg, ImageMsg>;
+  std::shared_ptr<message_filters::Subscriber<ImageMsg>> left_image_sub_;
+  std::shared_ptr<message_filters::Subscriber<ImageMsg>> right_image_sub_;
+  std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> image_sync_;
+  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr right_info_sub_;
+  sensor_msgs::msg::CameraInfo left_camera_info_;
+  sensor_msgs::msg::CameraInfo right_camera_info_;
+  std::atomic<bool> have_left_info_{false};
+  std::atomic<bool> have_right_info_{false};
+  std::atomic<bool> calibration_from_info_done_{false};
 
   // Configuration
   CameraConfig camera_config_;
@@ -191,7 +217,15 @@ public:
       get_logger(), "Debug: camera.left_sensor_id = %d, camera.flip_images_180 = %s",
       get_parameter("camera.left_sensor_id").as_int(),
       get_parameter("camera.flip_images_180").as_bool() ? "true" : "false");
-    create_cameras();
+
+    input_source_ = get_parameter("input_source").as_string();
+    const bool ros_topics_mode = (input_source_ == "ros_topics");
+    RCLCPP_INFO(get_logger(), "Input source: %s", input_source_.c_str());
+
+    // CSI cameras are only created when capturing directly from hardware.
+    if (!ros_topics_mode) {
+      create_cameras();
+    }
     create_stereo_processor();
     create_calibration();
     create_pointcloud_filter();
@@ -211,11 +245,17 @@ public:
       RCLCPP_WARN(get_logger(), "Failed to load calibration, using defaults");
     }
 
-    // Start cameras
-    start_cameras();
+    if (ros_topics_mode) {
+      // Drive processing from incoming ROS image topics (e.g. Gazebo) instead of
+      // the CSI capture thread.
+      setup_ros_input();
+    } else {
+      // Start cameras
+      start_cameras();
 
-    // Start processing thread
-    start_processing();
+      // Start processing thread
+      start_processing();
+    }
 
     RCLCPP_INFO(
       get_logger(), "Stereo camera node initialized with %s strategy",
@@ -270,6 +310,18 @@ private:
     declare_parameter("camera.processing_threads", 4);
     declare_parameter("camera.processing_quality", "balanced");
     declare_parameter("camera.flip_images_180", false);
+
+    // ========================================================================
+    // INPUT SOURCE PARAMETERS
+    // ========================================================================
+    // "csi"        : capture from Jetson CSI cameras (real robot, default).
+    // "ros_topics" : subscribe to a stereo image stream (e.g. Gazebo) and drive
+    //                the same processing pipeline.
+    declare_parameter("input_source", "csi");
+    declare_parameter("ros_input.left_image_topic", "/stereo_camera/left/image_raw");
+    declare_parameter("ros_input.right_image_topic", "/stereo_camera/right/image_raw");
+    declare_parameter("ros_input.left_info_topic", "/stereo_camera/left/camera_info");
+    declare_parameter("ros_input.right_info_topic", "/stereo_camera/right/camera_info");
 
     // ========================================================================
     // FRAME PARAMETERS
@@ -608,6 +660,23 @@ private:
       strategy_type = StereoProcessingFactory::StrategyType::CPU_BM;
     }
 
+    // When hardware acceleration is disabled (e.g. simulation, no CUDA), force a
+    // CPU strategy so disparity can still be computed. A GPU strategy would fail
+    // to initialize without a CUDA device.
+    if (!get_parameter("camera.use_hardware_acceleration").as_bool()) {
+      if (strategy_type == StereoProcessingFactory::StrategyType::GPU_BM) {
+        strategy_type = StereoProcessingFactory::StrategyType::CPU_BM;
+        RCLCPP_INFO(
+          get_logger(),
+          "Hardware acceleration disabled: overriding GPU_BM -> CPU_BM");
+      } else if (strategy_type == StereoProcessingFactory::StrategyType::GPU_SGBM) {
+        strategy_type = StereoProcessingFactory::StrategyType::CPU_SGBM;
+        RCLCPP_INFO(
+          get_logger(),
+          "Hardware acceleration disabled: overriding GPU_SGBM -> CPU_SGBM");
+      }
+    }
+
     stereo_processor_ = StereoProcessingFactory::create_strategy(strategy_type);
 
     if (!stereo_processor_->initialize(
@@ -771,6 +840,101 @@ private:
     RCLCPP_INFO(get_logger(), "Stopped processing thread");
   }
 
+  // ==========================================================================
+  // ROS-TOPIC INPUT (SIMULATION)
+  // ==========================================================================
+  void setup_ros_input()
+  {
+    const std::string left_image_topic =
+      get_parameter("ros_input.left_image_topic").as_string();
+    const std::string right_image_topic =
+      get_parameter("ros_input.right_image_topic").as_string();
+    const std::string left_info_topic =
+      get_parameter("ros_input.left_info_topic").as_string();
+    const std::string right_info_topic =
+      get_parameter("ros_input.right_info_topic").as_string();
+
+    // CameraInfo subscriptions populate the calibration (Q matrix) so that
+    // disparity / pointcloud generation becomes possible.
+    left_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
+      left_info_topic, rclcpp::QoS(1),
+      [this](const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
+        left_camera_info_ = *msg;
+        have_left_info_ = true;
+        try_update_calibration_from_infos();
+      });
+    right_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
+      right_info_topic, rclcpp::QoS(1),
+      [this](const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
+        right_camera_info_ = *msg;
+        have_right_info_ = true;
+        try_update_calibration_from_infos();
+      });
+
+    // Synchronized stereo image subscriptions.
+    left_image_sub_ = std::make_shared<message_filters::Subscriber<ImageMsg>>(
+      this, left_image_topic);
+    right_image_sub_ = std::make_shared<message_filters::Subscriber<ImageMsg>>(
+      this, right_image_topic);
+    image_sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(
+      SyncPolicy(10), *left_image_sub_, *right_image_sub_);
+    image_sync_->registerCallback(
+      std::bind(
+        &JetsonStereoNode::stereo_image_callback, this,
+        std::placeholders::_1, std::placeholders::_2));
+
+    RCLCPP_INFO(
+      get_logger(),
+      "ROS-topic input enabled. Images: [%s, %s], CameraInfo: [%s, %s]",
+      left_image_topic.c_str(), right_image_topic.c_str(),
+      left_info_topic.c_str(), right_info_topic.c_str());
+  }
+
+  void try_update_calibration_from_infos()
+  {
+    // Build calibration from CameraInfo exactly once. This intentionally
+    // overrides any default/loaded calibration: in sim the true Q comes from the
+    // gz CameraInfo, not the on-disk hardware calibration.
+    if (!have_left_info_ || !have_right_info_ || calibration_from_info_done_) {
+      return;
+    }
+    if (calibration_->from_rectified_camera_info_pair(left_camera_info_, right_camera_info_)) {
+      calibration_from_info_done_ = true;
+      RCLCPP_INFO(
+        get_logger(),
+        "Built stereo calibration from CameraInfo (rectified ideal-pinhole pair)");
+    } else {
+      RCLCPP_WARN(get_logger(), "Failed to build calibration from CameraInfo messages");
+    }
+  }
+
+  void stereo_image_callback(
+    const ImageMsg::ConstSharedPtr & left_msg,
+    const ImageMsg::ConstSharedPtr & right_msg)
+  {
+    try {
+      // Convert both images to BGR8 to match the cv::Mat format the CSI path
+      // feeds into process_stereo_frames (raw images are published as bgr8 and
+      // the disparity path converts 3-channel input to grayscale internally).
+      cv::Mat left_frame = cv_bridge::toCvCopy(left_msg, "bgr8")->image;
+      cv::Mat right_frame = cv_bridge::toCvCopy(right_msg, "bgr8")->image;
+
+      if (left_frame.empty() || right_frame.empty()) {
+        return;
+      }
+
+      // Stamp follows the input image header so downstream sync / TF lookups
+      // line up with use_sim_time.
+      process_stereo_frames(left_frame, right_frame, left_msg->header.stamp);
+    } catch (const cv_bridge::Exception & e) {
+      RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 1000, "cv_bridge conversion failed: %s", e.what());
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 1000, "Error in stereo image callback: %s", e.what());
+    }
+  }
+
   void processing_loop()
   {
     last_frame_time_ = now();
@@ -836,11 +1000,17 @@ private:
     }
   }
 
+  // CSI path: stamp the output with the current clock.
   void process_stereo_frames(const cv::Mat & left_frame, const cv::Mat & right_frame)
   {
-    std::lock_guard<std::mutex> lock(processing_mutex_);
+    process_stereo_frames(left_frame, right_frame, now());
+  }
 
-    rclcpp::Time timestamp = now();
+  void process_stereo_frames(
+    const cv::Mat & left_frame, const cv::Mat & right_frame,
+    const rclcpp::Time & timestamp)
+  {
+    std::lock_guard<std::mutex> lock(processing_mutex_);
 
     // Quality monitoring: Analyze raw image quality
     if (quality_config_.should_compute_any_metrics() &&
@@ -1649,6 +1819,103 @@ bool StereoCalibration::from_camera_info_msg(
     RCLCPP_ERROR(
       rclcpp::get_logger("stereo_calibration"),
       "Failed to convert camera info: %s", e.what());
+    return false;
+  }
+}
+
+bool StereoCalibration::from_rectified_camera_info_pair(
+  const sensor_msgs::msg::CameraInfo & left_info,
+  const sensor_msgs::msg::CameraInfo & right_info)
+{
+  try {
+    // Gazebo publishes already-rectified, ideal-pinhole images (no distortion).
+    // The reprojection matrix Q can therefore be built directly from the two
+    // projection matrices P (row-major 3x4):
+    //   fx = P[0], cx = P[2], cy = P[6]
+    //   baseline b = -P_right[3] / P_right[0]   (Tx encoded in right projection)
+    const auto & Pl = left_info.p;
+    const auto & Pr = right_info.p;
+
+    const double fx = Pl[0];
+    const double cx = Pl[2];
+    const double cy = Pl[6];
+
+    if (fx <= 0.0 || Pr[0] == 0.0) {
+      RCLCPP_ERROR(
+        rclcpp::get_logger("stereo_calibration"),
+        "Invalid projection matrix in CameraInfo (fx=%.3f, Pr[0]=%.3f)", fx, Pr[0]);
+      return false;
+    }
+
+    // Tx = Pr[3] = -fx * baseline  ->  baseline = -Pr[3] / Pr[0]
+    const double baseline = -Pr[3] / Pr[0];
+    if (baseline == 0.0) {
+      RCLCPP_ERROR(
+        rclcpp::get_logger("stereo_calibration"),
+        "Zero baseline derived from right CameraInfo projection matrix");
+      return false;
+    }
+
+    image_size_ = cv::Size(
+      static_cast<int>(left_info.width),
+      static_cast<int>(left_info.height));
+
+    // Store ideal camera matrices (used by e.g. DisparityImage.f).
+    camera_matrix_left_ = (cv::Mat_<double>(3, 3) <<
+      fx, 0.0, cx,
+      0.0, Pl[5], cy,
+      0.0, 0.0, 1.0);
+    camera_matrix_right_ = camera_matrix_left_.clone();
+    dist_coeffs_left_ = cv::Mat::zeros(1, 5, CV_64F);
+    dist_coeffs_right_ = cv::Mat::zeros(1, 5, CV_64F);
+
+    // Standard OpenCV reprojection matrix (disparity -> 3D), CALIB_ZERO_DISPARITY
+    // convention with positive baseline magnitude:
+    //   [ 1   0    0        -cx       ]
+    //   [ 0   1    0        -cy       ]
+    //   [ 0   0    0         fx       ]
+    //   [ 0   0  -1/b   (cx-cx')/b    ]
+    const double b = std::abs(baseline);
+    Q_ = cv::Mat::zeros(4, 4, CV_64F);
+    Q_.at<double>(0, 0) = 1.0;
+    Q_.at<double>(0, 3) = -cx;
+    Q_.at<double>(1, 1) = 1.0;
+    Q_.at<double>(1, 3) = -cy;
+    Q_.at<double>(2, 3) = fx;
+    Q_.at<double>(3, 2) = -1.0 / b;
+    Q_.at<double>(3, 3) = 0.0;
+
+    // Images are already rectified: rectification is a passthrough (identity).
+    R_ = cv::Mat::eye(3, 3, CV_64F);
+    T_ = (cv::Mat_<double>(3, 1) << -b, 0.0, 0.0);
+    R1_ = cv::Mat::eye(3, 3, CV_64F);
+    R2_ = cv::Mat::eye(3, 3, CV_64F);
+    P1_ = cv::Mat(3, 4, CV_64F);
+    P2_ = cv::Mat(3, 4, CV_64F);
+    for (int i = 0; i < 12; ++i) {
+      P1_.at<double>(i / 4, i % 4) = Pl[i];
+      P2_.at<double>(i / 4, i % 4) = Pr[i];
+    }
+
+    // Leave rectification maps empty -> rectify_images() passes frames through.
+    left_map1_.release();
+    left_map2_.release();
+    right_map1_.release();
+    right_map2_.release();
+
+    calibrated_ = true;
+
+    RCLCPP_INFO(
+      rclcpp::get_logger("stereo_calibration"),
+      "Calibration from CameraInfo: fx=%.2f, cx=%.2f, cy=%.2f, baseline=%.4f m",
+      fx, cx, cy, b);
+
+    return true;
+
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(
+      rclcpp::get_logger("stereo_calibration"),
+      "Failed to build calibration from CameraInfo pair: %s", e.what());
     return false;
   }
 }

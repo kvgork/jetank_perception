@@ -14,6 +14,8 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(jetank_detection REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(stereo_msgs REQUIRED)
@@ -22,8 +24,13 @@ find_package(std_srvs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(camera_info_manager REQUIRED)
+find_package(message_filters REQUIRED)
 find_package(pcl_conversions REQUIRED)
+find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(tf2_sensor_msgs REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(vision_msgs REQUIRED)
 # find_package(yaml-cpp-vendor REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(PCL REQUIRED)
@@ -73,6 +80,17 @@ if(BUILD_TESTING)
     target_include_directories(test_stereo_math PRIVATE include ${PCL_INCLUDE_DIRS})
     target_link_libraries(test_stereo_math ${OpenCV_LIBS} ${PCL_LIBRARIES})
   endif()
+
+  # Pure reprojection-math test (no ROS graph / camera / GPU / TF).
+  ament_add_gtest(test_reproject test/test_reproject.cpp)
+  if(TARGET test_reproject)
+    target_include_directories(test_reproject PRIVATE include ${PCL_INCLUDE_DIRS})
+    target_link_libraries(test_reproject ${PCL_LIBRARIES})
+    ament_target_dependencies(test_reproject
+      sensor_msgs
+      stereo_msgs
+      pcl_conversions)
+  endif()
 endif()
 
 # Create executables
@@ -82,6 +100,10 @@ add_executable(stereo_camera_node
 
 add_executable(camera_node
   src/single_camera.cpp)
+
+# STUB SegmentSocks action server (Phase 3 fills in the real reprojection logic)
+add_executable(sock_segmentation_server
+  src/sock_segmentation_server.cpp)
 
 # Set target dependencies
 ament_target_dependencies(stereo_camera_node
@@ -94,6 +116,7 @@ ament_target_dependencies(stereo_camera_node
   cv_bridge
   image_transport
   camera_info_manager
+  message_filters
   pcl_conversions
   tf2_ros
   OpenCV)
@@ -107,6 +130,29 @@ ament_target_dependencies(camera_node
   camera_info_manager
   pcl_conversions
   OpenCV)
+
+ament_target_dependencies(sock_segmentation_server
+  rclcpp
+  rclcpp_action
+  jetank_detection
+  sensor_msgs
+  stereo_msgs
+  geometry_msgs
+  vision_msgs
+  tf2
+  tf2_ros
+  tf2_sensor_msgs
+  tf2_geometry_msgs
+  pcl_conversions)
+
+target_include_directories(sock_segmentation_server PRIVATE
+  include
+  ${PCL_INCLUDE_DIRS})
+
+target_link_libraries(sock_segmentation_server
+  ${PCL_LIBRARIES})
+
+target_compile_features(sock_segmentation_server PUBLIC cxx_std_17)
 
 # Configure stereo_camera_node
 target_include_directories(stereo_camera_node PUBLIC
@@ -145,6 +191,9 @@ install(TARGETS stereo_camera_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS camera_node
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS sock_segmentation_server
   DESTINATION lib/${PROJECT_NAME})
 
 # Install launch files
