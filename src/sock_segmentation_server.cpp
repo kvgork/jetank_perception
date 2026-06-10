@@ -98,6 +98,14 @@ public:
     cluster_tolerance_ = this->declare_parameter<double>("cluster_tolerance", 0.05);
     ground_distance_threshold_ =
       this->declare_parameter<double>("ground_distance_threshold", 0.02);
+    // Ground-removal method. "height" (default): RANSAC-fit the flat floor plane
+    // in the optical frame, then KEEP points lying more than ground_margin above
+    // it on the camera side (the sock sits proud of the floor) — no base_link/TF
+    // needed. Robust where plain "ransac" inlier-removal deletes the whole blob
+    // because floor+sock fall within one plane band. "ransac": legacy inlier
+    // removal (keep everything not within ground_distance_threshold of the plane).
+    ground_filter_ = this->declare_parameter<std::string>("ground_filter", "height");
+    ground_margin_ = this->declare_parameter<double>("ground_margin", 0.012);
     default_target_frame_ =
       this->declare_parameter<std::string>("default_target_frame", "base_link");
     base_frame_ = this->declare_parameter<std::string>("base_frame", "base_link");
@@ -372,13 +380,17 @@ private:
       // Optional ground-plane removal.
       pcl::PointCloud<pcl::PointXYZ>::Ptr working = roi_cloud;
       if (remove_ground_) {
-        working = remove_ground_plane(roi_cloud);
+        working = (ground_filter_ == "height")
+          ? remove_ground_height(roi_cloud)
+          : remove_ground_plane(roi_cloud);
       }
       const size_t n_after_ground = working->size();
       RCLCPP_INFO(
         this->get_logger(),
-        "[det] after ground removal (remove_ground=%s): points=%zu",
-        remove_ground_ ? "true" : "false", n_after_ground);
+        "[det] after ground removal (remove_ground=%s filter=%s margin=%.3f): "
+        "points=%zu",
+        remove_ground_ ? "true" : "false", ground_filter_.c_str(),
+        ground_margin_, n_after_ground);
       if (static_cast<int>(working->size()) < min_points_) {
         RCLCPP_INFO(
           this->get_logger(),
@@ -557,6 +569,58 @@ private:
     return out;
   }
 
+  // Height-gate ground removal (optical frame, no TF / base_link needed).
+  //
+  // RANSAC-fit the dominant flat plane (the arena floor), then KEEP only points
+  // lying more than ground_margin_ above it on the CAMERA side — the sock sits
+  // proud of the floor, so its points clear the margin while the floor itself
+  // (signed distance ~0) is dropped. This survives a near-coplanar sock that the
+  // binary inlier-removal in remove_ground_plane() would erase entirely.
+  pcl::PointCloud<pcl::PointXYZ>::Ptr remove_ground_height(
+    const pcl::PointCloud<pcl::PointXYZ>::Ptr & in)
+  {
+    if (in->size() < 3) {return in;}
+
+    pcl::SACSegmentation<pcl::PointXYZ> seg;
+    pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+    pcl::ModelCoefficients::Ptr coeffs(new pcl::ModelCoefficients);
+    seg.setOptimizeCoefficients(true);
+    seg.setModelType(pcl::SACMODEL_PLANE);
+    seg.setMethodType(pcl::SAC_RANSAC);
+    seg.setDistanceThreshold(ground_distance_threshold_);
+    seg.setMaxIterations(100);
+    seg.setInputCloud(in);
+    seg.segment(*inliers, *coeffs);
+
+    if (coeffs->values.size() < 4) {
+      return in;   // no plane found; leave the cloud unchanged
+    }
+
+    double a = coeffs->values[0], b = coeffs->values[1];
+    double c = coeffs->values[2], d = coeffs->values[3];
+    const double norm = std::sqrt(a * a + b * b + c * c);
+    if (norm < 1e-6) {return in;}
+    a /= norm; b /= norm; c /= norm; d /= norm;
+
+    // Signed distance of the camera origin (0,0,0) from the plane is d. Orient
+    // "positive" toward the camera side so a point above the floor (toward the
+    // camera, where the sock is) reads as a positive height above the plane.
+    const double sign = (d >= 0.0) ? 1.0 : -1.0;
+
+    auto out = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+    out->reserve(in->size());
+    for (const auto & p : in->points) {
+      const double height = sign * (a * p.x + b * p.y + c * p.z + d);
+      if (height > ground_margin_) {
+        out->push_back(p);
+      }
+    }
+    out->width = static_cast<uint32_t>(out->size());
+    out->height = 1;
+    out->is_dense = false;
+    return out;
+  }
+
   // Euclidean-cluster the cloud and return the largest cluster.
   //
   // When remove_ground_ is false there is typically a single dominant
@@ -660,6 +724,8 @@ private:
   int min_points_{30};
   double cluster_tolerance_{0.05};
   double ground_distance_threshold_{0.02};
+  std::string ground_filter_{"height"};
+  double ground_margin_{0.012};
   std::string default_target_frame_{"base_link"};
   std::string base_frame_{"base_link"};
 };
