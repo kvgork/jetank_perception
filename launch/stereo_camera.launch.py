@@ -27,6 +27,21 @@ def generate_launch_description():
     # ============================================================================
 
     # Configuration file argument
+    # Optical (z-forward) frames are correct for disparity/pointcloud reprojection
+    # on both sim and hardware (the config yaml ships the non-optical *_link defaults,
+    # which mis-tag the cloud). Default to optical here and always apply the override.
+    left_frame_id_arg = DeclareLaunchArgument(
+        'left_frame_id',
+        default_value='camera_left_optical_frame',
+        description='frames.left_frame_id baked into the node (z-forward optical frame).'
+    )
+
+    right_frame_id_arg = DeclareLaunchArgument(
+        'right_frame_id',
+        default_value='camera_right_optical_frame',
+        description='frames.right_frame_id baked into the node.'
+    )
+
     config_file_arg = DeclareLaunchArgument(
         'config_file',
         default_value=PathJoinSubstitution([
@@ -139,6 +154,9 @@ def generate_launch_description():
                 'calibration.left_camera_info_url': left_camera_url,
                 'calibration.right_camera_info_url': right_camera_url,
                 'calibration.stereo_calibration_url': stereo_calibration_url,
+                # Override the non-optical *_link defaults from the config yaml.
+                'frames.left_frame_id': LaunchConfiguration('left_frame_id'),
+                'frames.right_frame_id': LaunchConfiguration('right_frame_id'),
             }
         ],
         output='screen',
@@ -210,6 +228,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         # Launch arguments
+        left_frame_id_arg,
+        right_frame_id_arg,
         config_file_arg,
         namespace_arg,
         log_level_arg,
