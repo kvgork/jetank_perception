@@ -1057,16 +1057,6 @@ private:
     if (calibration_->is_calibrated()) {
       calibration_->rectify_images(left_frame, right_frame, left_rectified, right_rectified);
 
-      // Quality monitoring: Analyze rectification quality
-      if (quality_config_.should_compute_any_metrics() &&
-        quality_config_.calibration_validation.enable &&
-        (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0))
-      {
-        RCLCPP_INFO(get_logger(), "--- Stage 2: Rectification Quality ---");
-        auto rect_quality = analyze_rectification_quality(left_rectified, right_rectified);
-        rect_quality.log(get_logger());
-      }
-
       // Publish rectified images (respect compression mode)
       if (publish_rectified_images_) {
         // Publish raw unless mode is compressed_only
