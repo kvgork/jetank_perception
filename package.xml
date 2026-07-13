@@ -34,8 +34,11 @@
   <depend>libopencv-dev</depend>
   <depend>libpcl-dev</depend>
   <depend>libpcl-all-dev</depend>
-  <depend>libgstreamer1.0-dev</depend>
-  <depend>libgstreamer-plugins-base1.0-dev</depend>
+  <!-- GStreamer is only needed at runtime: capture uses OpenCV's
+       cv::CAP_GSTREAMER pipeline strings (nvarguscamerasrc on the Jetson),
+       never the GStreamer C API. -->
+  <exec_depend>gstreamer1.0-plugins-base</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-good</exec_depend>
 
   <!-- Runtime dependencies for launch files -->
   <exec_depend>launch</exec_depend>
