@@ -32,8 +32,8 @@
   <depend>pcl_conversions</depend>
 
   <depend>libopencv-dev</depend>
-  <depend>libpcl-dev</depend>
   <depend>libpcl-all-dev</depend>
+  <depend>libyaml-cpp-dev</depend>
   <!-- GStreamer is only needed at runtime: capture uses OpenCV's
        cv::CAP_GSTREAMER pipeline strings (nvarguscamerasrc on the Jetson),
        never the GStreamer C API. -->
@@ -45,8 +45,6 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>launch_xml</exec_depend>
   <exec_depend>launch_yaml</exec_depend>
-
-  <!-- <depend>yaml-cpp-vendor</depend> -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
