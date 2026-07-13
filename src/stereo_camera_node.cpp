@@ -908,11 +908,14 @@ private:
     const ImageMsg::ConstSharedPtr & right_msg)
   {
     try {
-      // Convert both images to BGR8 to match the cv::Mat format the CSI path
-      // feeds into process_stereo_frames (raw images are published as bgr8 and
-      // the disparity path converts 3-channel input to grayscale internally).
-      cv::Mat left_frame = cv_bridge::toCvCopy(left_msg, "bgr8")->image;
-      cv::Mat right_frame = cv_bridge::toCvCopy(right_msg, "bgr8")->image;
+      // Raw-image publishing needs bgr8 frames (matching the CSI path). When
+      // raw publishing is disabled the frames only feed the grayscale
+      // disparity path, so convert once to mono8 here instead of doing a BGR
+      // conversion that compute_and_publish_disparity_and_pointcloud would
+      // immediately undo with cvtColor(BGR2GRAY) on every frame.
+      const char * target_encoding = publish_raw_images_ ? "bgr8" : "mono8";
+      cv::Mat left_frame = cv_bridge::toCvCopy(left_msg, target_encoding)->image;
+      cv::Mat right_frame = cv_bridge::toCvCopy(right_msg, target_encoding)->image;
 
       if (left_frame.empty() || right_frame.empty()) {
         return;
@@ -943,8 +946,9 @@ private:
         cv::Mat left_frame = left_camera_->get_frame();
         cv::Mat right_frame = right_camera_->get_frame();
 
-        // Flip both images 180 degrees if enabled
-        if (get_parameter("camera.flip_images_180").as_bool()) {
+        // Flip both images 180 degrees if enabled (cached in load_parameters;
+        // not runtime-reconfigurable, so no per-frame parameter lookup needed)
+        if (camera_config_.flip_180) {
           cv::flip(left_frame, left_frame, -1);             // -1 = 180 degree rotation
           cv::flip(right_frame, right_frame, -1);
         }
@@ -1313,17 +1317,19 @@ private:
     disparity_msg.image.is_bigendian = false;
     disparity_msg.image.step = disparity.cols * sizeof(float);
 
-    // Convert disparity to float and copy data
-    cv::Mat disparity_float;
+    // Convert disparity to float directly into the message buffer: wrap the
+    // pre-sized data vector with a cv::Mat header so convertTo writes in
+    // place, avoiding a full-frame temporary allocation plus memcpy per frame.
+    const size_t data_size =
+      static_cast<size_t>(disparity.rows) * disparity.cols * sizeof(float);
+    disparity_msg.image.data.resize(data_size);
+    cv::Mat disparity_float(
+      disparity.rows, disparity.cols, CV_32F, disparity_msg.image.data.data());
     if (disparity.type() == CV_16S) {
       disparity.convertTo(disparity_float, CV_32F, 1.0 / 16.0);
     } else {
       disparity.convertTo(disparity_float, CV_32F);
     }
-
-    size_t data_size = disparity_float.rows * disparity_float.cols * sizeof(float);
-    disparity_msg.image.data.resize(data_size);
-    memcpy(&disparity_msg.image.data[0], disparity_float.data, data_size);
 
     // Fill disparity parameters
     disparity_msg.f = calibration_->get_left_camera_matrix().at<double>(0, 0);     // fx
