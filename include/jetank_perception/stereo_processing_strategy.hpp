@@ -33,6 +33,7 @@ struct StereoConfig
   int prefilter_size = 9;
   int prefilter_cap = 31;
   int texture_threshold = 10;
+  int smaller_block_size = 0;
   int uniqueness_ratio = 10;
   int speckle_window_size = 100;
   int speckle_range = 32;
@@ -164,6 +165,7 @@ public:
       stereo_matcher_->setPreFilterSize(config_.prefilter_size);
       stereo_matcher_->setPreFilterCap(config_.prefilter_cap);
       stereo_matcher_->setTextureThreshold(config_.texture_threshold);
+      stereo_matcher_->setSmallerBlockSize(config_.smaller_block_size);
       stereo_matcher_->setUniquenessRatio(config_.uniqueness_ratio);
       stereo_matcher_->setSpeckleWindowSize(config_.speckle_window_size);
       stereo_matcher_->setSpeckleRange(config_.speckle_range);
@@ -238,6 +240,7 @@ public:
       stereo_matcher_->setPreFilterSize(config_.prefilter_size);
       stereo_matcher_->setPreFilterCap(config_.prefilter_cap);
       stereo_matcher_->setTextureThreshold(config_.texture_threshold);
+      stereo_matcher_->setSmallerBlockSize(config_.smaller_block_size);
       stereo_matcher_->setUniquenessRatio(config_.uniqueness_ratio);
       stereo_matcher_->setSpeckleWindowSize(config_.speckle_window_size);
       stereo_matcher_->setSpeckleRange(config_.speckle_range);
@@ -302,6 +305,7 @@ public:
       stereo_matcher_->setPreFilterSize(config_.prefilter_size);
       stereo_matcher_->setPreFilterCap(config_.prefilter_cap);
       stereo_matcher_->setTextureThreshold(config_.texture_threshold);
+      stereo_matcher_->setSmallerBlockSize(config_.smaller_block_size);
       stereo_matcher_->setUniquenessRatio(config_.uniqueness_ratio);
       stereo_matcher_->setSpeckleWindowSize(config_.speckle_window_size);
       stereo_matcher_->setSpeckleRange(config_.speckle_range);
@@ -346,6 +350,7 @@ public:
       stereo_matcher_->setPreFilterSize(config_.prefilter_size);
       stereo_matcher_->setPreFilterCap(config_.prefilter_cap);
       stereo_matcher_->setTextureThreshold(config_.texture_threshold);
+      stereo_matcher_->setSmallerBlockSize(config_.smaller_block_size);
       stereo_matcher_->setUniquenessRatio(config_.uniqueness_ratio);
       stereo_matcher_->setSpeckleWindowSize(config_.speckle_window_size);
       stereo_matcher_->setSpeckleRange(config_.speckle_range);

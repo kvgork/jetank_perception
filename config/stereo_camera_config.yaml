@@ -72,13 +72,6 @@ stereo_camera:
       pointcloud.range_filter.enable: true
       pointcloud.range_filter.min_range: 0.20         # 20cm minimum (experimental - expect more noise)
       pointcloud.range_filter.max_range: 2.0          # 2m maximum (beyond is unreliable)
-      pointcloud.passthrough_filter.enable: false
-      pointcloud.passthrough_filter.x_min: -5.0
-      pointcloud.passthrough_filter.x_max: 5.0
-      pointcloud.passthrough_filter.y_min: -5.0
-      pointcloud.passthrough_filter.y_max: 5.0
-      pointcloud.passthrough_filter.z_min: 0.0
-      pointcloud.passthrough_filter.z_max: 3.0
 
       # ============================================================================
       # PUBLISHING CONFIGURATION

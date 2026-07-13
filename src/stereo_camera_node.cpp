@@ -381,15 +381,6 @@ private:
     declare_parameter("pointcloud.range_filter.min_range", 0.1);
     declare_parameter("pointcloud.range_filter.max_range", 10.0);
 
-    // Passthrough filter
-    declare_parameter("pointcloud.passthrough_filter.enable", false);
-    declare_parameter("pointcloud.passthrough_filter.x_min", -5.0);
-    declare_parameter("pointcloud.passthrough_filter.x_max", 5.0);
-    declare_parameter("pointcloud.passthrough_filter.y_min", -5.0);
-    declare_parameter("pointcloud.passthrough_filter.y_max", 5.0);
-    declare_parameter("pointcloud.passthrough_filter.z_min", 0.0);
-    declare_parameter("pointcloud.passthrough_filter.z_max", 3.0);
-
     // ========================================================================
     // PUBLISHING PARAMETERS
     // ========================================================================
@@ -504,6 +495,10 @@ private:
     stereo_config_.speckle_window_size = get_parameter("stereo.speckle_window_size").as_int();
     stereo_config_.speckle_range = get_parameter("stereo.speckle_range").as_int();
     stereo_config_.disp12_max_diff = get_parameter("stereo.disp12_max_diff").as_int();
+    stereo_config_.prefilter_cap = get_parameter("stereo.pre_filter_cap").as_int();
+    stereo_config_.prefilter_size = get_parameter("stereo.pre_filter_size").as_int();
+    stereo_config_.texture_threshold = get_parameter("stereo.texture_threshold").as_int();
+    stereo_config_.smaller_block_size = get_parameter("stereo.smaller_block_size").as_int();
     stereo_config_.use_gpu = get_parameter("stereo.use_gpu").as_bool();
 
     // ========================================================================
