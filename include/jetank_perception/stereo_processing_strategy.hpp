@@ -72,11 +72,54 @@ public:
   virtual cv::Mat compute_disparity(
     const cv::Mat & left_rectified,
     const cv::Mat & right_rectified) = 0;
-  virtual pcl::PointCloud<pcl::PointXYZ>::Ptr generate_pointcloud(
-    const cv::Mat & disparity,
-    const cv::Mat & Q_matrix) = 0;
   virtual void update_config(const StereoConfig & config) = 0;
   virtual std::string get_strategy_name() const = 0;
+
+  // Shared disparity -> organized point cloud conversion. The cloud keeps the
+  // full width*height layout with NaN for invalid-disparity pixels
+  // (is_dense = false) so downstream consumers see an organized cloud.
+  virtual pcl::PointCloud<pcl::PointXYZ>::Ptr generate_pointcloud(
+    const cv::Mat & disparity,
+    const cv::Mat & Q_matrix)
+  {
+    auto cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+
+    try {
+      // Convert disparity to 3D points
+      cv::Mat points_3d;
+      cv::reprojectImageTo3D(disparity, points_3d, Q_matrix);
+
+      // Convert to PCL point cloud
+      cloud->width = disparity.cols;
+      cloud->height = disparity.rows;
+      cloud->is_dense = false;
+      cloud->points.resize(cloud->width * cloud->height);
+
+      int point_idx = 0;
+      for (int y = 0; y < disparity.rows; ++y) {
+        const cv::Vec3f * row = points_3d.ptr<cv::Vec3f>(y);
+        for (int x = 0; x < disparity.cols; ++x) {
+          const cv::Vec3f & pt = row[x];
+
+          pcl::PointXYZ & pcl_pt = cloud->points[point_idx++];
+          pcl_pt.x = pt[0];
+          pcl_pt.y = pt[1];
+          pcl_pt.z = pt[2];
+
+          // Check for invalid points
+          if (!std::isfinite(pcl_pt.x) || !std::isfinite(pcl_pt.y) || !std::isfinite(pcl_pt.z)) {
+            pcl_pt.x = pcl_pt.y = pcl_pt.z = std::numeric_limits<float>::quiet_NaN();
+          }
+        }
+      }
+
+    } catch (const std::exception & e) {
+      std::cerr << "Error generating point cloud: " << e.what() << std::endl;
+      return std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+    }
+
+    return cloud;
+  }
 
   // Performance monitoring
   virtual void get_processing_stats(double & avg_time_ms, double & fps) const
@@ -189,48 +232,6 @@ public:
     }
   }
 
-  pcl::PointCloud<pcl::PointXYZ>::Ptr generate_pointcloud(
-    const cv::Mat & disparity,
-    const cv::Mat & Q_matrix) override
-  {
-    auto cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-
-    try {
-      // Convert disparity to 3D points
-      cv::Mat points_3d;
-      cv::reprojectImageTo3D(disparity, points_3d, Q_matrix);
-
-      // Convert to PCL point cloud
-      cloud->width = disparity.cols;
-      cloud->height = disparity.rows;
-      cloud->is_dense = false;
-      cloud->points.resize(cloud->width * cloud->height);
-
-      int point_idx = 0;
-      for (int y = 0; y < disparity.rows; ++y) {
-        for (int x = 0; x < disparity.cols; ++x) {
-          const cv::Vec3f & pt = points_3d.at<cv::Vec3f>(y, x);
-
-          pcl::PointXYZ & pcl_pt = cloud->points[point_idx++];
-          pcl_pt.x = pt[0];
-          pcl_pt.y = pt[1];
-          pcl_pt.z = pt[2];
-
-          // Check for invalid points
-          if (!std::isfinite(pcl_pt.x) || !std::isfinite(pcl_pt.y) || !std::isfinite(pcl_pt.z)) {
-            pcl_pt.x = pcl_pt.y = pcl_pt.z = std::numeric_limits<float>::quiet_NaN();
-          }
-        }
-      }
-
-    } catch (const std::exception & e) {
-      std::cerr << "Error generating point cloud: " << e.what() << std::endl;
-      return std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-    }
-
-    return cloud;
-  }
-
   void update_config(const StereoConfig & config) override
   {
     config_ = config;
@@ -338,45 +339,6 @@ public:
       std::cerr << "OpenCV error in CPU compute_disparity: " << e.what() << std::endl;
       return cv::Mat();
     }
-  }
-
-  pcl::PointCloud<pcl::PointXYZ>::Ptr generate_pointcloud(
-    const cv::Mat & disparity,
-    const cv::Mat & Q_matrix) override
-  {
-    auto cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-
-    try {
-      cv::Mat points_3d;
-      cv::reprojectImageTo3D(disparity, points_3d, Q_matrix);
-
-      cloud->width = disparity.cols;
-      cloud->height = disparity.rows;
-      cloud->is_dense = false;
-      cloud->points.resize(cloud->width * cloud->height);
-
-      int point_idx = 0;
-      for (int y = 0; y < disparity.rows; ++y) {
-        for (int x = 0; x < disparity.cols; ++x) {
-          const cv::Vec3f & pt = points_3d.at<cv::Vec3f>(y, x);
-
-          pcl::PointXYZ & pcl_pt = cloud->points[point_idx++];
-          pcl_pt.x = pt[0];
-          pcl_pt.y = pt[1];
-          pcl_pt.z = pt[2];
-
-          if (!std::isfinite(pcl_pt.x) || !std::isfinite(pcl_pt.y) || !std::isfinite(pcl_pt.z)) {
-            pcl_pt.x = pcl_pt.y = pcl_pt.z = std::numeric_limits<float>::quiet_NaN();
-          }
-        }
-      }
-
-    } catch (const std::exception & e) {
-      std::cerr << "Error generating point cloud: " << e.what() << std::endl;
-      return std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-    }
-
-    return cloud;
   }
 
   void update_config(const StereoConfig & config) override
@@ -505,45 +467,6 @@ public:
       std::cerr << "OpenCV error in SGBM compute_disparity: " << e.what() << std::endl;
       return cv::Mat();
     }
-  }
-
-  pcl::PointCloud<pcl::PointXYZ>::Ptr generate_pointcloud(
-    const cv::Mat & disparity,
-    const cv::Mat & Q_matrix) override
-  {
-    auto cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-
-    try {
-      cv::Mat points_3d;
-      cv::reprojectImageTo3D(disparity, points_3d, Q_matrix);
-
-      cloud->width = disparity.cols;
-      cloud->height = disparity.rows;
-      cloud->is_dense = false;
-      cloud->points.resize(cloud->width * cloud->height);
-
-      int point_idx = 0;
-      for (int y = 0; y < disparity.rows; ++y) {
-        for (int x = 0; x < disparity.cols; ++x) {
-          const cv::Vec3f & pt = points_3d.at<cv::Vec3f>(y, x);
-
-          pcl::PointXYZ & pcl_pt = cloud->points[point_idx++];
-          pcl_pt.x = pt[0];
-          pcl_pt.y = pt[1];
-          pcl_pt.z = pt[2];
-
-          if (!std::isfinite(pcl_pt.x) || !std::isfinite(pcl_pt.y) || !std::isfinite(pcl_pt.z)) {
-            pcl_pt.x = pcl_pt.y = pcl_pt.z = std::numeric_limits<float>::quiet_NaN();
-          }
-        }
-      }
-
-    } catch (const std::exception & e) {
-      std::cerr << "Error generating point cloud: " << e.what() << std::endl;
-      return std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-    }
-
-    return cloud;
   }
 
   void update_config(const StereoConfig & config) override
