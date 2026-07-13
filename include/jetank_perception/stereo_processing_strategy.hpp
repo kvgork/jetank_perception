@@ -52,11 +52,6 @@ struct PointCloudConfig
   double max_range = 10.0;
   int max_threads = 4;
   int downsample_factor = 1;
-
-  // Alternative names for compatibility
-  bool apply_voxel_filter = true;
-  bool apply_statistical_filter = true;
-  bool apply_range_filter = true;
 };
 
 // =============================================================================
@@ -600,17 +595,17 @@ public:
 
     try {
       // Apply range filter first to remove obviously bad points
-      if (config_.enable_range_filter || config_.apply_range_filter) {
+      if (config_.enable_range_filter) {
         apply_range_filter(cloud);
       }
 
       // Apply voxel filter to downsample
-      if (config_.enable_voxel_filter || config_.apply_voxel_filter) {
+      if (config_.enable_voxel_filter) {
         apply_voxel_filter(cloud);
       }
 
       // Apply statistical filter to remove outliers
-      if (config_.enable_statistical_filter || config_.apply_statistical_filter) {
+      if (config_.enable_statistical_filter) {
         apply_statistical_filter(cloud);
       }
 
