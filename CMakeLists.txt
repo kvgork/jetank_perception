@@ -31,12 +31,12 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_sensor_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(vision_msgs REQUIRED)
-# find_package(yaml-cpp-vendor REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(PCL REQUIRED)
 
+# No GStreamer dev dependency: camera capture goes through OpenCV's
+# cv::CAP_GSTREAMER pipeline strings, which only needs GStreamer at runtime.
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0)
 pkg_check_modules(YAML_CPP REQUIRED yaml-cpp)
 
 # Add filesystem for C++17
@@ -124,11 +124,7 @@ ament_target_dependencies(stereo_camera_node
 ament_target_dependencies(camera_node
   rclcpp
   sensor_msgs
-  stereo_msgs
-  std_srvs
   cv_bridge
-  camera_info_manager
-  pcl_conversions
   OpenCV)
 
 ament_target_dependencies(sock_segmentation_server
@@ -157,34 +153,28 @@ target_compile_features(sock_segmentation_server PUBLIC cxx_std_17)
 # Configure stereo_camera_node
 target_include_directories(stereo_camera_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-  ${GST_INCLUDE_DIRS})
+  $<INSTALL_INTERFACE:include>)
 
 target_compile_features(stereo_camera_node PUBLIC cxx_std_17)
 
 target_link_libraries(stereo_camera_node
   ${OpenCV_LIBS}
   ${PCL_LIBRARIES}
-  ${GST_LIBRARIES}
   ${YAML_CPP_LIBRARIES}
   Threads::Threads
   stdc++fs)
 
-# Configure camera_node
+# Configure camera_node (simple capture node: only rclcpp/sensor_msgs/
+# cv_bridge/OpenCV are used; no PCL or yaml-cpp)
 target_include_directories(camera_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-  ${GST_INCLUDE_DIRS})
+  $<INSTALL_INTERFACE:include>)
 
 target_compile_features(camera_node PUBLIC cxx_std_17)
 
 target_link_libraries(camera_node
   ${OpenCV_LIBS}
-  ${PCL_LIBRARIES}
-  ${GST_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-  Threads::Threads
-  stdc++fs)
+  Threads::Threads)
 
 # Install targets
 install(TARGETS stereo_camera_node

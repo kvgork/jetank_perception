@@ -381,15 +381,6 @@ private:
     declare_parameter("pointcloud.range_filter.min_range", 0.1);
     declare_parameter("pointcloud.range_filter.max_range", 10.0);
 
-    // Passthrough filter
-    declare_parameter("pointcloud.passthrough_filter.enable", false);
-    declare_parameter("pointcloud.passthrough_filter.x_min", -5.0);
-    declare_parameter("pointcloud.passthrough_filter.x_max", 5.0);
-    declare_parameter("pointcloud.passthrough_filter.y_min", -5.0);
-    declare_parameter("pointcloud.passthrough_filter.y_max", 5.0);
-    declare_parameter("pointcloud.passthrough_filter.z_min", 0.0);
-    declare_parameter("pointcloud.passthrough_filter.z_max", 3.0);
-
     // ========================================================================
     // PUBLISHING PARAMETERS
     // ========================================================================
@@ -504,6 +495,10 @@ private:
     stereo_config_.speckle_window_size = get_parameter("stereo.speckle_window_size").as_int();
     stereo_config_.speckle_range = get_parameter("stereo.speckle_range").as_int();
     stereo_config_.disp12_max_diff = get_parameter("stereo.disp12_max_diff").as_int();
+    stereo_config_.prefilter_cap = get_parameter("stereo.pre_filter_cap").as_int();
+    stereo_config_.prefilter_size = get_parameter("stereo.pre_filter_size").as_int();
+    stereo_config_.texture_threshold = get_parameter("stereo.texture_threshold").as_int();
+    stereo_config_.smaller_block_size = get_parameter("stereo.smaller_block_size").as_int();
     stereo_config_.use_gpu = get_parameter("stereo.use_gpu").as_bool();
 
     // ========================================================================
@@ -913,11 +908,14 @@ private:
     const ImageMsg::ConstSharedPtr & right_msg)
   {
     try {
-      // Convert both images to BGR8 to match the cv::Mat format the CSI path
-      // feeds into process_stereo_frames (raw images are published as bgr8 and
-      // the disparity path converts 3-channel input to grayscale internally).
-      cv::Mat left_frame = cv_bridge::toCvCopy(left_msg, "bgr8")->image;
-      cv::Mat right_frame = cv_bridge::toCvCopy(right_msg, "bgr8")->image;
+      // Raw-image publishing needs bgr8 frames (matching the CSI path). When
+      // raw publishing is disabled the frames only feed the grayscale
+      // disparity path, so convert once to mono8 here instead of doing a BGR
+      // conversion that compute_and_publish_disparity_and_pointcloud would
+      // immediately undo with cvtColor(BGR2GRAY) on every frame.
+      const char * target_encoding = publish_raw_images_ ? "bgr8" : "mono8";
+      cv::Mat left_frame = cv_bridge::toCvCopy(left_msg, target_encoding)->image;
+      cv::Mat right_frame = cv_bridge::toCvCopy(right_msg, target_encoding)->image;
 
       if (left_frame.empty() || right_frame.empty()) {
         return;
@@ -948,8 +946,9 @@ private:
         cv::Mat left_frame = left_camera_->get_frame();
         cv::Mat right_frame = right_camera_->get_frame();
 
-        // Flip both images 180 degrees if enabled
-        if (get_parameter("camera.flip_images_180").as_bool()) {
+        // Flip both images 180 degrees if enabled (cached in load_parameters;
+        // not runtime-reconfigurable, so no per-frame parameter lookup needed)
+        if (camera_config_.flip_180) {
           cv::flip(left_frame, left_frame, -1);             // -1 = 180 degree rotation
           cv::flip(right_frame, right_frame, -1);
         }
@@ -1057,16 +1056,6 @@ private:
     cv::Mat left_rectified, right_rectified;
     if (calibration_->is_calibrated()) {
       calibration_->rectify_images(left_frame, right_frame, left_rectified, right_rectified);
-
-      // Quality monitoring: Analyze rectification quality
-      if (quality_config_.should_compute_any_metrics() &&
-        quality_config_.calibration_validation.enable &&
-        (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0))
-      {
-        RCLCPP_INFO(get_logger(), "--- Stage 2: Rectification Quality ---");
-        auto rect_quality = analyze_rectification_quality(left_rectified, right_rectified);
-        rect_quality.log(get_logger());
-      }
 
       // Publish rectified images (respect compression mode)
       if (publish_rectified_images_) {
@@ -1318,17 +1307,19 @@ private:
     disparity_msg.image.is_bigendian = false;
     disparity_msg.image.step = disparity.cols * sizeof(float);
 
-    // Convert disparity to float and copy data
-    cv::Mat disparity_float;
+    // Convert disparity to float directly into the message buffer: wrap the
+    // pre-sized data vector with a cv::Mat header so convertTo writes in
+    // place, avoiding a full-frame temporary allocation plus memcpy per frame.
+    const size_t data_size =
+      static_cast<size_t>(disparity.rows) * disparity.cols * sizeof(float);
+    disparity_msg.image.data.resize(data_size);
+    cv::Mat disparity_float(
+      disparity.rows, disparity.cols, CV_32F, disparity_msg.image.data.data());
     if (disparity.type() == CV_16S) {
       disparity.convertTo(disparity_float, CV_32F, 1.0 / 16.0);
     } else {
       disparity.convertTo(disparity_float, CV_32F);
     }
-
-    size_t data_size = disparity_float.rows * disparity_float.cols * sizeof(float);
-    disparity_msg.image.data.resize(data_size);
-    memcpy(&disparity_msg.image.data[0], disparity_float.data, data_size);
 
     // Fill disparity parameters
     disparity_msg.f = calibration_->get_left_camera_matrix().at<double>(0, 0);     // fx

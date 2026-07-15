@@ -91,10 +91,10 @@ public:
     using namespace std::placeholders;
 
     // --- Parameters ---
-    max_sync_dt_   = this->declare_parameter<double>("max_sync_dt", 0.5);
-    max_age_       = this->declare_parameter<double>("max_age", 1.0);
+    max_sync_dt_ = this->declare_parameter<double>("max_sync_dt", 0.5);
+    max_age_ = this->declare_parameter<double>("max_age", 1.0);
     remove_ground_ = this->declare_parameter<bool>("remove_ground", true);
-    min_points_    = this->declare_parameter<int>("min_points", 30);
+    min_points_ = this->declare_parameter<int>("min_points", 30);
     cluster_tolerance_ = this->declare_parameter<double>("cluster_tolerance", 0.05);
     ground_distance_threshold_ =
       this->declare_parameter<double>("ground_distance_threshold", 0.02);
@@ -185,7 +185,7 @@ private:
   }
 
   rclcpp_action::CancelResponse handle_cancel(
-    const std::shared_ptr<GoalHandle> /*goal_handle*/)
+    const std::shared_ptr<GoalHandle>/*goal_handle*/)
   {
     RCLCPP_INFO(this->get_logger(), "Received cancel request — accepting");
     return rclcpp_action::CancelResponse::ACCEPT;
@@ -310,8 +310,8 @@ private:
     }
 
     const std::string optical_frame =
-      disparity->header.frame_id.empty() ? camera_info->header.frame_id
-                                         : disparity->header.frame_id;
+      disparity->header.frame_id.empty() ? camera_info->header.frame_id :
+      disparity->header.frame_id;
 
     // 2+3) Reproject + cluster each qualifying detection into a blob.
     auto feedback = std::make_shared<SegmentSocks::Feedback>();
@@ -380,9 +380,9 @@ private:
       // Optional ground-plane removal.
       pcl::PointCloud<pcl::PointXYZ>::Ptr working = roi_cloud;
       if (remove_ground_) {
-        working = (ground_filter_ == "height")
-          ? remove_ground_height(roi_cloud)
-          : remove_ground_plane(roi_cloud);
+        working = (ground_filter_ == "height") ?
+          remove_ground_height(roi_cloud) :
+          remove_ground_plane(roi_cloud);
       }
       const size_t n_after_ground = working->size();
       RCLCPP_INFO(

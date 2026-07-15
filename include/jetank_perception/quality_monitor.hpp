@@ -20,16 +20,6 @@ struct ImageQualityMetrics
   void log(rclcpp::Logger logger, const std::string & image_name) const;
 };
 
-struct RectificationQualityMetrics
-{
-  double mean_epipolar_error = 0.0;
-  double max_epipolar_error = 0.0;
-  int samples_checked = 0;
-  bool quality_acceptable = false;
-
-  void log(rclcpp::Logger logger) const;
-};
-
 struct DisparityQualityMetrics
 {
   int total_pixels = 0;
@@ -62,11 +52,6 @@ struct PointCloudQualityMetrics
 
 // Quality analysis functions
 ImageQualityMetrics analyze_image_quality(const cv::Mat & image);
-
-RectificationQualityMetrics analyze_rectification_quality(
-  const cv::Mat & left_rect,
-  const cv::Mat & right_rect,
-  int num_samples = 50);
 
 DisparityQualityMetrics analyze_disparity_quality(const cv::Mat & disparity);
 
