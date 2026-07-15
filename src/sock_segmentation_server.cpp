@@ -280,11 +280,11 @@ private:
       this->get_parameter("use_sim_time").as_bool() ? "true" : "false");
 
     auto age_ok = [&](const rclcpp::Time & stamp) {
-        // Guard against zero/unset stamps (e.g. replayed data with no clock):
-        // only enforce max_age when both clocks are non-zero.
-        if (stamp.nanoseconds() == 0 || now.nanoseconds() == 0) {return true;}
-        return (now - stamp).seconds() <= max_age_;
-      };
+      // Guard against zero/unset stamps (e.g. replayed data with no clock):
+      // only enforce max_age when both clocks are non-zero.
+      if (stamp.nanoseconds() == 0 || now.nanoseconds() == 0) {return true;}
+      return (now - stamp).seconds() <= max_age_;
+    };
 
     if (!age_ok(disp_stamp) || !age_ok(det_stamp)) {
       RCLCPP_WARN(
