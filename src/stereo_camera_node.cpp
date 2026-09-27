@@ -332,7 +332,6 @@ private:
     declare_parameter("camera.right_sensor_id", 1);
     declare_parameter("camera.use_hardware_acceleration", true);
     declare_parameter("camera.processing_threads", 4);
-    declare_parameter("camera.processing_quality", "balanced");
     declare_parameter("camera.flip_images_180", false);
 
     // ========================================================================
@@ -377,16 +376,10 @@ private:
     declare_parameter("calibration.left_camera_info_url", "");
     declare_parameter("calibration.right_camera_info_url", "");
     declare_parameter("calibration.stereo_calibration_url", "");
-    declare_parameter("calibration.auto_load_calibration", true);
-    declare_parameter("calibration.min_calibration_samples", 30);
-    declare_parameter("calibration.max_reprojection_error", 0.5);
-    declare_parameter("calibration.default.focal_length", 300.0);
-    declare_parameter("calibration.transforms.publish_camera_transforms", false);
 
     // ========================================================================
     // POINT CLOUD PARAMETERS
     // ========================================================================
-    declare_parameter("pointcloud.enable", true);
     declare_parameter("pointcloud.downsample_factor", 1);
     declare_parameter("pointcloud.max_processing_threads", 4);
 
@@ -416,34 +409,12 @@ private:
     declare_parameter("publishing.publish_rectified_images", true);
     declare_parameter("publishing.publish_disparity", true);
     declare_parameter("publishing.publish_pointcloud", true);
-    declare_parameter("publishing.qos_depth", 10);
 
     // ========================================================================
     // PERFORMANCE PARAMETERS
     // ========================================================================
     declare_parameter("performance.log_performance", true);
     declare_parameter("performance.performance_log_interval", 100);
-    declare_parameter("performance.enable_multithreading", true);
-    declare_parameter("performance.thread_priority", 0);
-    declare_parameter("performance.enable_memory_optimization", true);
-    declare_parameter("performance.max_memory_usage_mb", 500);
-
-    // ========================================================================
-    // LOGGING PARAMETERS
-    // ========================================================================
-    declare_parameter("logging.log_calibration_info", true);
-    declare_parameter("logging.log_processing_stats", false);
-    declare_parameter("logging.log_frame_drops", true);
-
-    // ========================================================================
-    // DEVELOPMENT PARAMETERS
-    // ========================================================================
-    declare_parameter("development.save_debug_images", false);
-    declare_parameter("development.debug_image_path", "/tmp/stereo_debug");
-    declare_parameter("development.strict_frame_sync", true);
-    declare_parameter("development.max_frame_age_ms", 100);
-    declare_parameter("development.auto_restart_on_error", true);
-    declare_parameter("development.max_consecutive_errors", 5);
 
     // ========================================================================
     // QUALITY MONITORING PARAMETERS

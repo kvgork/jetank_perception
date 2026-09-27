@@ -16,7 +16,6 @@ stereo_camera:
       camera.right_sensor_id: 0
       camera.use_hardware_acceleration: true
       camera.processing_threads: 4
-      camera.processing_quality: "balanced"
 
       # ============================================================================
       # FRAME CONFIGURATION
@@ -49,17 +48,11 @@ stereo_camera:
       calibration.left_camera_info_url: "file://$(find-pkg-share jetank_perception)/config/calibration/left_camera.yaml"
       calibration.right_camera_info_url: "file://$(find-pkg-share jetank_perception)/config/calibration/right_camera.yaml"
       calibration.stereo_calibration_url: "file://$(find-pkg-share jetank_perception)/config/calibration/stereo_calibration.yaml"
-      calibration.auto_load_calibration: false
-      calibration.min_calibration_samples: 30
-      calibration.max_reprojection_error: 0.5
-      calibration.default.focal_length: 300.0
-      calibration.transforms.publish_camera_transforms: false
 
       # ============================================================================
       # POINT CLOUD CONFIGURATION
       # Optimized for 0.3-1.5m working range
       # ============================================================================
-      pointcloud.enable: true
       pointcloud.downsample_factor: 1
       pointcloud.max_processing_threads: 4
       pointcloud.voxel_filter.enable: true
@@ -78,7 +71,6 @@ stereo_camera:
       publishing.publish_rectified_images: true
       publishing.publish_disparity: true
       publishing.publish_pointcloud: true
-      publishing.qos_depth: 10
 
       # Compression configuration for raw images
       publishing.raw_images.compression.enabled: true
@@ -99,24 +91,6 @@ stereo_camera:
       # ============================================================================
       performance.log_performance: true
       performance.performance_log_interval: 100
-      performance.enable_multithreading: true
-      performance.thread_priority: 0
-      performance.enable_memory_optimization: true
-      performance.max_memory_usage_mb: 500
-        
-      logging.log_calibration_info: true
-      logging.log_processing_stats: false
-      logging.log_frame_drops: true
-
-      # ============================================================================
-      # DEVELOPMENT AND TESTING  
-      # ============================================================================
-      development.save_debug_images: false
-      development.debug_image_path: "/tmp/stereo_debug"
-      development.strict_frame_sync: true
-      development.max_frame_age_ms: 100
-      development.auto_restart_on_error: true
-      development.max_consecutive_errors: 5
 
       # ============================================================================
       # QUALITY MONITORING CONFIGURATION

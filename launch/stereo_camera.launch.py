@@ -148,8 +148,6 @@ def generate_launch_description():
             ]),
             # Direct parameter overrides for key runtime settings
             {
-                'calibration.transforms.publish_camera_transforms':
-                    LaunchConfiguration('publish_camera_transforms'),
                 # Override calibration file paths with resolved absolute file URLs
                 'calibration.left_camera_info_url': left_camera_url,
                 'calibration.right_camera_info_url': right_camera_url,
