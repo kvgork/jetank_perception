@@ -92,7 +92,12 @@ public:
 
     // --- Parameters ---
     max_sync_dt_ = this->declare_parameter<double>("max_sync_dt", 0.5);
-    max_age_ = this->declare_parameter<double>("max_age", 1.0);
+    // Was 1.0s, tighter than the observed disparity publish period (~1.6s,
+    // i.e. <1 Hz), which rejected every goal on the "Stale input" branch.
+    // Raised to 2.0s so a still-below-1Hz disparity stream doesn't fail here
+    // by construction; re-tune down once the disparity rate is re-measured
+    // live. See jetank_perception-42.
+    max_age_ = this->declare_parameter<double>("max_age", 2.0);
     remove_ground_ = this->declare_parameter<bool>("remove_ground", true);
     min_points_ = this->declare_parameter<int>("min_points", 30);
     cluster_tolerance_ = this->declare_parameter<double>("cluster_tolerance", 0.05);
