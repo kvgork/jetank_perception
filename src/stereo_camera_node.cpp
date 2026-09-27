@@ -1590,7 +1590,10 @@ bool StereoCalibration::load_from_camera_info(
     Q_.at<double>(1, 1) = 1.0;
     Q_.at<double>(1, 3) = -cy;
     Q_.at<double>(2, 3) = fx;
-    Q_.at<double>(3, 2) = -1.0 / b;
+    // Q(3,2) = -1/Tx per OpenCV's stereoRectify convention, where
+    // Tx = P2(0,3)/fx (NOT the abs-valued `baseline` above, which would
+    // silently flip the sign whenever Tx is negative, as it is here).
+    Q_.at<double>(3, 2) = -fx / tx_right;
     Q_.at<double>(3, 3) = 0.0;
 
     T_ = (cv::Mat_<double>(3, 1) << -b, 0.0, 0.0);
@@ -1918,7 +1921,10 @@ bool StereoCalibration::from_rectified_camera_info_pair(
     Q_.at<double>(1, 1) = 1.0;
     Q_.at<double>(1, 3) = -cy;
     Q_.at<double>(2, 3) = fx;
-    Q_.at<double>(3, 2) = -1.0 / b;
+    // Q(3,2) = -1/Tx per OpenCV's stereoRectify convention, where
+    // Tx = Pr[3]/fx (NOT the abs-valued `baseline` above, which would
+    // silently flip the sign whenever Tx is negative, as it is here).
+    Q_.at<double>(3, 2) = -fx / Pr[3];
     Q_.at<double>(3, 3) = 0.0;
 
     // Images are already rectified: rectification is a passthrough (identity).
