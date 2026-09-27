@@ -21,8 +21,6 @@ find_package(sensor_msgs REQUIRED)
 find_package(stereo_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
-find_package(cv_bridge REQUIRED)
-find_package(image_transport REQUIRED)
 find_package(camera_info_manager REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(pcl_conversions REQUIRED)
@@ -113,8 +111,6 @@ ament_target_dependencies(stereo_camera_node
   stereo_msgs
   geometry_msgs
   std_srvs
-  cv_bridge
-  image_transport
   camera_info_manager
   message_filters
   pcl_conversions
@@ -124,7 +120,6 @@ ament_target_dependencies(stereo_camera_node
 ament_target_dependencies(camera_node
   rclcpp
   sensor_msgs
-  cv_bridge
   OpenCV)
 
 ament_target_dependencies(sock_segmentation_server
@@ -165,7 +160,7 @@ target_link_libraries(stereo_camera_node
   stdc++fs)
 
 # Configure camera_node (simple capture node: only rclcpp/sensor_msgs/
-# cv_bridge/OpenCV are used; no PCL or yaml-cpp)
+# OpenCV are used; no PCL or yaml-cpp)
 target_include_directories(camera_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)

@@ -6,10 +6,8 @@
 #include <stereo_msgs/msg/disparity_image.hpp>  // Correct header
 #include <sensor_msgs/srv/set_camera_info.hpp>
 #include <std_srvs/srv/trigger.hpp>
-#include <cv_bridge/cv_bridge.h>
+#include <sensor_msgs/image_encodings.hpp>
 #include <camera_info_manager/camera_info_manager.hpp>
-#include <image_transport/image_transport.hpp>
-#include <image_transport/camera_publisher.hpp>
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
@@ -19,6 +17,7 @@
 #include "jetank_perception/stereo_processing_strategy.hpp"
 #include "jetank_perception/quality_monitoring.hpp"
 #include "jetank_perception/quality_monitor.hpp"
+#include "jetank_perception/image_msg_utils.hpp"
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/calib3d.hpp>
@@ -131,9 +130,6 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr right_rect_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr right_info_pub_;
-
-  // image_transport for compression support
-  std::shared_ptr<image_transport::ImageTransport> image_transport_;
 
   // Compressed image publishers (actual JPEG/PNG compression)
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr left_image_compressed_pub_;
@@ -934,6 +930,66 @@ private:
     }
   }
 
+  // Minimal replacement for cv_bridge::toCvCopy(): wraps the message buffer
+  // as a cv::Mat and converts to target_encoding (bgr8/mono8, the only
+  // values this node requests) when needed. Bounded to the 8-bit encodings
+  // this node actually receives on ros_input topics: bgr8 (a bag/replay of
+  // the CSI path) and rgb8 (Gazebo's ros_gz camera bridge, per
+  // jetank_description/urdf/components/camera.xacro format RGB_INT8). Any
+  // other source or target encoding throws std::runtime_error, which the
+  // caller already treats as "drop this frame" (previously a
+  // cv_bridge::Exception, now folded into the same std::exception handler).
+  static cv::Mat decode_image_msg(
+    const ImageMsg::ConstSharedPtr & msg,
+    const std::string & target_encoding)
+  {
+    namespace enc = sensor_msgs::image_encodings;
+
+    if (enc::bitDepth(msg->encoding) != 8) {
+      throw std::runtime_error("unsupported source encoding: " + msg->encoding);
+    }
+    const int channels = enc::numChannels(msg->encoding);
+    const cv::Mat src(
+      static_cast<int>(msg->height), static_cast<int>(msg->width), CV_8UC(channels),
+      const_cast<uint8_t *>(msg->data.data()), msg->step);
+
+    if (msg->encoding == target_encoding) {
+      return src.clone();
+    }
+
+    cv::Mat dst;
+    if (target_encoding == enc::MONO8) {
+      if (msg->encoding == enc::RGB8) {
+        cv::cvtColor(src, dst, cv::COLOR_RGB2GRAY);
+      } else if (msg->encoding == enc::BGR8) {
+        cv::cvtColor(src, dst, cv::COLOR_BGR2GRAY);
+      } else if (msg->encoding == enc::RGBA8) {
+        cv::cvtColor(src, dst, cv::COLOR_RGBA2GRAY);
+      } else if (msg->encoding == enc::BGRA8) {
+        cv::cvtColor(src, dst, cv::COLOR_BGRA2GRAY);
+      } else {
+        throw std::runtime_error(
+                "unsupported conversion " + msg->encoding + " -> " + target_encoding);
+      }
+    } else if (target_encoding == enc::BGR8) {
+      if (msg->encoding == enc::RGB8) {
+        cv::cvtColor(src, dst, cv::COLOR_RGB2BGR);
+      } else if (msg->encoding == enc::RGBA8) {
+        cv::cvtColor(src, dst, cv::COLOR_RGBA2BGR);
+      } else if (msg->encoding == enc::BGRA8) {
+        cv::cvtColor(src, dst, cv::COLOR_BGRA2BGR);
+      } else if (msg->encoding == enc::MONO8) {
+        cv::cvtColor(src, dst, cv::COLOR_GRAY2BGR);
+      } else {
+        throw std::runtime_error(
+                "unsupported conversion " + msg->encoding + " -> " + target_encoding);
+      }
+    } else {
+      throw std::runtime_error("unsupported target encoding: " + target_encoding);
+    }
+    return dst;
+  }
+
   void stereo_image_callback(
     const ImageMsg::ConstSharedPtr & left_msg,
     const ImageMsg::ConstSharedPtr & right_msg)
@@ -944,9 +1000,9 @@ private:
       // disparity path, so convert once to mono8 here instead of doing a BGR
       // conversion that compute_and_publish_disparity_and_pointcloud would
       // immediately undo with cvtColor(BGR2GRAY) on every frame.
-      const char * target_encoding = publish_raw_images_ ? "bgr8" : "mono8";
-      cv::Mat left_frame = cv_bridge::toCvCopy(left_msg, target_encoding)->image;
-      cv::Mat right_frame = cv_bridge::toCvCopy(right_msg, target_encoding)->image;
+      const std::string target_encoding = publish_raw_images_ ? "bgr8" : "mono8";
+      cv::Mat left_frame = decode_image_msg(left_msg, target_encoding);
+      cv::Mat right_frame = decode_image_msg(right_msg, target_encoding);
 
       if (left_frame.empty() || right_frame.empty()) {
         return;
@@ -955,9 +1011,6 @@ private:
       // Stamp follows the input image header so downstream sync / TF lookups
       // line up with use_sim_time.
       process_stereo_frames(left_frame, right_frame, left_msg->header.stamp);
-    } catch (const cv_bridge::Exception & e) {
-      RCLCPP_ERROR_THROTTLE(
-        get_logger(), *get_clock(), 1000, "cv_bridge conversion failed: %s", e.what());
     } catch (const std::exception & e) {
       RCLCPP_ERROR_THROTTLE(
         get_logger(), *get_clock(), 1000, "Error in stereo image callback: %s", e.what());
@@ -1173,7 +1226,7 @@ private:
 
     if (!pub || pub->get_subscription_count() == 0) {return;}   // Don't publish if no subscribers
 
-    auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), encoding, image).toImageMsg();
+    auto msg = mat_to_image_msg(encoding, image);
     msg->header.stamp = timestamp;
     msg->header.frame_id = frame_id;
     pub->publish(*msg);
@@ -1348,7 +1401,7 @@ private:
         disparity, stereo_config_.min_disparity,
         stereo_config_.min_disparity + stereo_config_.num_disparities);
       if (!colored.empty()) {
-        auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", colored).toImageMsg();
+        auto msg = mat_to_image_msg("bgr8", colored);
         msg->header.stamp = timestamp;
         msg->header.frame_id = left_frame_id_;
         disparity_colored_pub_->publish(*msg);
@@ -1359,7 +1412,7 @@ private:
     if (consumers.depth_uncertainty) {
       cv::Mat uncertainty = create_depth_uncertainty_map(disparity, calibration_->get_Q_matrix());
       if (!uncertainty.empty()) {
-        auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", uncertainty).toImageMsg();
+        auto msg = mat_to_image_msg("bgr8", uncertainty);
         msg->header.stamp = timestamp;
         msg->header.frame_id = left_frame_id_;
         depth_uncertainty_pub_->publish(*msg);
