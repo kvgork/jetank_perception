@@ -30,10 +30,15 @@ ImageQualityMetrics analyze_image_quality(const cv::Mat & image)
     return metrics;
   }
 
-  // Convert to grayscale if needed
+  // Convert to grayscale if needed. channels() == 4 is the BGR8-config CSI
+  // path's colour-preserving BGRx capture (see camera_interface.hpp
+  // make_pipeline()); without this branch cv::minMaxLoc()/meanStdDev()
+  // below would throw on a 4-channel Mat.
   cv::Mat gray;
   if (image.channels() == 3) {
     cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
+  } else if (image.channels() == 4) {
+    cv::cvtColor(image, gray, cv::COLOR_BGRA2GRAY);
   } else {
     gray = image;
   }

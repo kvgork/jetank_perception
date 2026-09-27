@@ -1032,15 +1032,18 @@ private:
 
     // Publish raw images (respect compression mode)
     if (publish_raw_images_) {
+      // camera.format == "GRAY8" makes the CSI pipeline capture single-
+      // channel frames directly, and camera.format == "BGR8" (the shipped
+      // default) captures colour-preserving 4-channel BGRx frames straight
+      // from nvvidconv with no CPU videoconvert stage (see make_pipeline());
+      // label the raw topic accordingly instead of always claiming bgr8.
+      const char * left_encoding = raw_frame_encoding(left_frame);
+      const char * right_encoding = raw_frame_encoding(right_frame);
+
       // Publish raw unless mode is compressed_only
       if (!compression_config_.raw_images.enabled ||
         compression_config_.raw_images.mode != "compressed_only")
       {
-        // camera.format == "GRAY8" makes the CSI pipeline capture single-
-        // channel frames directly (see build_gstreamer_pipeline); label the
-        // raw topic accordingly instead of always claiming bgr8.
-        const char * left_encoding = left_frame.channels() == 1 ? "mono8" : "bgr8";
-        const char * right_encoding = right_frame.channels() == 1 ? "mono8" : "bgr8";
         publish_image(left_image_pub_, left_frame, left_frame_id_, timestamp, left_encoding);
         publish_image(right_image_pub_, right_frame, right_frame_id_, timestamp, right_encoding);
       }
@@ -1049,13 +1052,17 @@ private:
       if (compression_config_.raw_images.enabled &&
         compression_config_.raw_images.mode != "raw_only")
       {
+        // cv::imencode() accepts 3- and 4-channel (and mono) Mats directly,
+        // so the encoding string here only labels the message for consumers
+        // that pass it through decode_image_msg(); it is not fed to
+        // imencode itself.
         publish_compressed_image(
           left_image_compressed_pub_, left_frame,
-          left_frame_id_, timestamp, "bgr8",
+          left_frame_id_, timestamp, left_encoding,
           compression_config_.raw_images);
         publish_compressed_image(
           right_image_compressed_pub_, right_frame,
-          right_frame_id_, timestamp, "bgr8",
+          right_frame_id_, timestamp, right_encoding,
           compression_config_.raw_images);
       }
     }
@@ -1077,10 +1084,12 @@ private:
     cv::Mat left_rectified, right_rectified;
     if (calibration_->is_calibrated() && rectified_wanted) {
       // Convert to grayscale before remapping: the CSI pipeline delivers BGR
-      // (3-channel), and remapping 3 channels only to immediately discard 2/3
-      // of them in compute_and_publish_disparity_and_pointcloud() wastes ~3x
-      // the remap bandwidth. This also fixes left_rect_pub_/right_rect_pub_
-      // below, which published the still-3-channel rectified Mat tagged as
+      // (3-channel, CPU-videoconvert fallback path) or BGRx (4-channel,
+      // colour-preserving BGR8-config path, see make_pipeline()), and
+      // remapping 3-4 channels only to immediately discard the extra
+      // channels in compute_and_publish_disparity_and_pointcloud() wastes
+      // bandwidth. This also fixes left_rect_pub_/right_rect_pub_ below,
+      // which published the still-multi-channel rectified Mat tagged as
       // "mono8" (a real encoding/step mismatch for any raw subscriber).
       //
       // Skipping this whole block (remap included) when rectified_wanted is
@@ -1091,11 +1100,15 @@ private:
       cv::Mat left_gray_in, right_gray_in;
       if (left_frame.channels() == 3) {
         cv::cvtColor(left_frame, left_gray_in, cv::COLOR_BGR2GRAY);
+      } else if (left_frame.channels() == 4) {
+        cv::cvtColor(left_frame, left_gray_in, cv::COLOR_BGRA2GRAY);
       } else {
         left_gray_in = left_frame;
       }
       if (right_frame.channels() == 3) {
         cv::cvtColor(right_frame, right_gray_in, cv::COLOR_BGR2GRAY);
+      } else if (right_frame.channels() == 4) {
+        cv::cvtColor(right_frame, right_gray_in, cv::COLOR_BGRA2GRAY);
       } else {
         right_gray_in = right_frame;
       }
@@ -1138,6 +1151,19 @@ private:
     }
 
     quality_frame_counter_++;
+  }
+
+  // Encoding label for a frame straight off the CSI pipeline (see
+  // camera_interface.hpp make_pipeline()): 1 channel is a GRAY8 capture,
+  // 4 channels is a BGR8-config colour-preserving BGRx capture (no CPU
+  // videoconvert), 3 channels is the CPU-videoconvert BGR fallback path.
+  static const char * raw_frame_encoding(const cv::Mat & frame)
+  {
+    switch (frame.channels()) {
+      case 1: return "mono8";
+      case 4: return "bgra8";
+      default: return "bgr8";
+    }
   }
 
   void publish_image(
@@ -1282,6 +1308,9 @@ private:
     if (left_rectified.channels() == 3) {
       cv::cvtColor(left_rectified, left_gray, cv::COLOR_BGR2GRAY);
       RCLCPP_DEBUG_ONCE(get_logger(), "Converting left image from BGR to grayscale");
+    } else if (left_rectified.channels() == 4) {
+      cv::cvtColor(left_rectified, left_gray, cv::COLOR_BGRA2GRAY);
+      RCLCPP_DEBUG_ONCE(get_logger(), "Converting left image from BGRA to grayscale");
     } else {
       left_gray = left_rectified;
     }
@@ -1289,6 +1318,9 @@ private:
     if (right_rectified.channels() == 3) {
       cv::cvtColor(right_rectified, right_gray, cv::COLOR_BGR2GRAY);
       RCLCPP_DEBUG_ONCE(get_logger(), "Converting right image from BGR to grayscale");
+    } else if (right_rectified.channels() == 4) {
+      cv::cvtColor(right_rectified, right_gray, cv::COLOR_BGRA2GRAY);
+      RCLCPP_DEBUG_ONCE(get_logger(), "Converting right image from BGRA to grayscale");
     } else {
       right_gray = right_rectified;
     }

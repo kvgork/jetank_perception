@@ -259,10 +259,27 @@ public:
 private:
   // Build the nvarguscamerasrc pipeline for this config. GRAY8 lets
   // nvvidconv output grayscale directly in hardware, removing the CPU
-  // videoconvert stage and the consumer's BGR->GRAY cvtColor; any other
-  // format keeps the BGRx + CPU videoconvert path. max-buffers=1 drop=true
+  // videoconvert stage and the consumer's BGR->GRAY cvtColor. BGR8 (the
+  // shipped default, config/stereo_camera_config.yaml) is colour-preserving
+  // but similarly skips the CPU videoconvert stage: nvvidconv outputs BGRx
+  // (4-channel) directly, appsink hands that straight to OpenCV as a
+  // CV_8UC4 Mat, and the consumer (stereo_camera_node.cpp) publishes it as
+  // bgra8 and uses cv::COLOR_BGRA2GRAY where a single channel is needed.
+  // This is what removes the CPU videoconvert + BGR2GRAY double-conversion
+  // jetank_perception-04 measured, without dropping colour for the raw/web
+  // viewer path. Any other requested format falls back to the original
+  // BGRx + CPU videoconvert path, since it is not one this node's
+  // consumers have been made 4-channel-aware for. max-buffers=1 drop=true
   // sync=false bounds appsink's queue depth itself, since
   // CAP_PROP_BUFFERSIZE is a no-op for OpenCV's GStreamer backend.
+  //
+  // NOTE: nvvidconv's ability to hand BGRx straight to appsink (no
+  // videoconvert in between) could not be verified against real camera
+  // hardware/JetPack in this change (no camera access here); it is only
+  // compile-verified. If a given JetPack's nvvidconv cannot negotiate BGRx
+  // directly into appsink, fall back to camera.format: "GRAY8" as the
+  // config default instead (colour is then genuinely unobtainable without
+  // the CPU stage).
   //
   // This replaces a template/cache/fallback/compatibility-test system that
   // only ever had one real template: the "cache" was a single entry keyed
@@ -273,15 +290,26 @@ private:
   // the one template that always ran.
   std::string make_pipeline(const CameraConfig & config)
   {
-    const char * caps_template = (config.format == "GRAY8") ?
-      "nvarguscamerasrc sensor-id=%d ! "
-      "video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=%d/1 ! "
-      "nvvidconv ! video/x-raw,format=GRAY8,width=%d,height=%d ! "
-      "appsink max-buffers=1 drop=true sync=false" :
-      "nvarguscamerasrc sensor-id=%d ! "
-      "video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=%d/1 ! "
-      "nvvidconv ! video/x-raw,width=%d,height=%d,format=BGRx ! videoconvert ! "
-      "appsink max-buffers=1 drop=true sync=false";
+    const char * caps_template;
+    if (config.format == "GRAY8") {
+      caps_template =
+        "nvarguscamerasrc sensor-id=%d ! "
+        "video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=%d/1 ! "
+        "nvvidconv ! video/x-raw,format=GRAY8,width=%d,height=%d ! "
+        "appsink max-buffers=1 drop=true sync=false";
+    } else if (config.format == "BGR8") {
+      caps_template =
+        "nvarguscamerasrc sensor-id=%d ! "
+        "video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=%d/1 ! "
+        "nvvidconv ! video/x-raw,format=BGRx,width=%d,height=%d ! "
+        "appsink max-buffers=1 drop=true sync=false";
+    } else {
+      caps_template =
+        "nvarguscamerasrc sensor-id=%d ! "
+        "video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=%d/1 ! "
+        "nvvidconv ! video/x-raw,width=%d,height=%d,format=BGRx ! videoconvert ! "
+        "appsink max-buffers=1 drop=true sync=false";
+    }
 
     char pipeline_buffer[512];
     snprintf(
