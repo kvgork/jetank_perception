@@ -1046,8 +1046,13 @@ private:
       if (!compression_config_.raw_images.enabled ||
         compression_config_.raw_images.mode != "compressed_only")
       {
-        publish_image(left_image_pub_, left_frame, left_frame_id_, timestamp, "bgr8");
-        publish_image(right_image_pub_, right_frame, right_frame_id_, timestamp, "bgr8");
+        // camera.format == "GRAY8" makes the CSI pipeline capture single-
+        // channel frames directly (see build_gstreamer_pipeline); label the
+        // raw topic accordingly instead of always claiming bgr8.
+        const char * left_encoding = left_frame.channels() == 1 ? "mono8" : "bgr8";
+        const char * right_encoding = right_frame.channels() == 1 ? "mono8" : "bgr8";
+        publish_image(left_image_pub_, left_frame, left_frame_id_, timestamp, left_encoding);
+        publish_image(right_image_pub_, right_frame, right_frame_id_, timestamp, right_encoding);
       }
 
       // Publish compressed unless mode is raw_only

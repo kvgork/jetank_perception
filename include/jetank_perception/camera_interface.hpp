@@ -290,7 +290,7 @@ private:
     }
 
     // Define pipeline templates in order of preference
-    std::vector<PipelineTemplate> templates = get_pipeline_templates();
+    std::vector<PipelineTemplate> templates = get_pipeline_templates(config);
 
     std::cout << "[PIPELINE] Testing " << templates.size() << " pipeline configurations" <<
       std::endl;
@@ -318,17 +318,31 @@ private:
     return fallback;
   }
 
-  std::vector<PipelineTemplate> get_pipeline_templates()
+  std::vector<PipelineTemplate> get_pipeline_templates(const CameraConfig & config)
   {
     std::vector<PipelineTemplate> templates;
 
-    templates.push_back(
-      {
-        "Scaled_Output",
-        "nvarguscamerasrc sensor-id=%d ! video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=30/1 ! nvvidconv ! video/x-raw,width=%d,height=%d,format=BGRx ! videoconvert ! appsink max-buffers=1 drop=true sync=false",
-        "Sensor with hardware scaling",
-        6
-      });
+    if (config.format == "GRAY8") {
+      // Let nvvidconv produce GRAY8 straight out of hardware: for
+      // grayscale-only consumers (stereo matching) this removes the CPU
+      // videoconvert stage entirely, plus the BGR->GRAY cvtColor the
+      // consumer would otherwise run on every frame.
+      templates.push_back(
+        {
+          "Scaled_Output_GRAY8",
+          "nvarguscamerasrc sensor-id=%d ! video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=%d/1 ! nvvidconv ! video/x-raw,format=GRAY8,width=%d,height=%d ! appsink max-buffers=1 drop=true sync=false",
+          "Sensor with hardware scaling, hardware GRAY8 conversion",
+          6
+        });
+    } else {
+      templates.push_back(
+        {
+          "Scaled_Output",
+          "nvarguscamerasrc sensor-id=%d ! video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=%d/1 ! nvvidconv ! video/x-raw,width=%d,height=%d,format=BGRx ! videoconvert ! appsink max-buffers=1 drop=true sync=false",
+          "Sensor with hardware scaling",
+          6
+        });
+    }
 
     return templates;
   }
@@ -339,18 +353,12 @@ private:
   {
     char pipeline_buffer[1024];
 
-    if (template_config.name == "Scaled_Output") {
-      snprintf(
-        pipeline_buffer, sizeof(pipeline_buffer),
-        template_config.template_str.c_str(),
-        config.sensor_id, config.width, config.height);
-    } else {
-      // Other templates
-      snprintf(
-        pipeline_buffer, sizeof(pipeline_buffer),
-        template_config.template_str.c_str(),
-        config.sensor_id);
-    }
+    // Both templates share the same placeholder order: sensor-id, fps,
+    // width, height.
+    snprintf(
+      pipeline_buffer, sizeof(pipeline_buffer),
+      template_config.template_str.c_str(),
+      config.sensor_id, config.fps, config.width, config.height);
 
     return std::string(pipeline_buffer);
   }
