@@ -225,6 +225,14 @@ public:
   {
     // Initialize components
     initialize_parameters();
+
+    // Bound OpenCV's internal worker pool (cvtColor/remap/imencode/flip run
+    // through it) instead of leaving it at the default of one thread per
+    // core, which was measured competing with the GStreamer/argus capture
+    // threads and the ROS executor for the same cores. This parameter was
+    // previously declared but never applied.
+    cv::setNumThreads(static_cast<int>(get_parameter("camera.processing_threads").as_int()));
+
     RCLCPP_INFO(
       get_logger(), "Debug: camera.left_sensor_id = %d, camera.flip_images_180 = %s",
       get_parameter("camera.left_sensor_id").as_int(),
