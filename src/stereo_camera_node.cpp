@@ -59,6 +59,17 @@ public:
   cv::Mat get_Q_matrix() const {return Q_;}
   bool is_calibrated() const {return calibrated_;}
 
+  // f (focal length, px) and t (baseline, m) for stereo_msgs/DisparityImage,
+  // read from the same P1_/T_ that compute_rectification_maps() /
+  // load_from_camera_info() / from_rectified_camera_info_pair() already
+  // populate consistently, instead of a separately-declared parameter that
+  // can silently drift from the calibration actually in effect.
+  double get_disparity_f() const {return P1_.empty() ? 0.0 : P1_.at<double>(0, 0);}
+  double get_disparity_baseline() const
+  {
+    return T_.empty() ? 0.0 : std::abs(T_.at<double>(0, 0));
+  }
+
   // Getters for camera matrices
   cv::Mat get_left_camera_matrix() const {return camera_matrix_left_;}
   cv::Mat get_right_camera_matrix() const {return camera_matrix_right_;}
@@ -366,7 +377,6 @@ private:
     declare_parameter("calibration.min_calibration_samples", 30);
     declare_parameter("calibration.max_reprojection_error", 0.5);
     declare_parameter("calibration.default.focal_length", 300.0);
-    declare_parameter("calibration.default.baseline", 0.06);
     declare_parameter("calibration.transforms.publish_camera_transforms", false);
 
     // ========================================================================
@@ -1437,12 +1447,19 @@ private:
       disparity.convertTo(disparity_float, CV_32F);
     }
 
-    // Fill disparity parameters
-    disparity_msg.f = calibration_->get_left_camera_matrix().at<double>(0, 0);     // fx
-    disparity_msg.t = get_parameter("calibration.default.baseline").as_double();     // baseline
+    // Fill disparity parameters. f/t come from the same rectified P1_/T_ used
+    // to build Q_ (get_disparity_f/get_disparity_baseline), not the
+    // unrectified K and a separate default-baseline parameter that could
+    // (and did) disagree with the calibration actually in effect.
+    disparity_msg.f = calibration_->get_disparity_f();     // fx, rectified
+    disparity_msg.t = calibration_->get_disparity_baseline();     // baseline, m
     disparity_msg.min_disparity = stereo_config_.min_disparity;
     disparity_msg.max_disparity = stereo_config_.min_disparity + stereo_config_.num_disparities;
-    disparity_msg.delta_d = 1.0;
+    // CPU/GPU BM and SGBM all report disparity as CV_16S in 1/16-px units
+    // (see stereo_processing_strategy.hpp); the float conversion above
+    // divides by 16, so the smallest representable step in disparity_float
+    // is 1/16 px, not a whole pixel.
+    disparity_msg.delta_d = (disparity.type() == CV_16S) ? (1.0 / 16.0) : 1.0;
 
     disparity_pub_->publish(disparity_msg);
   }

@@ -53,7 +53,6 @@ stereo_camera:
       calibration.min_calibration_samples: 30
       calibration.max_reprojection_error: 0.5
       calibration.default.focal_length: 300.0
-      calibration.default.baseline: 0.06
       calibration.transforms.publish_camera_transforms: false
 
       # ============================================================================
