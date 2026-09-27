@@ -736,9 +736,16 @@ private:
         compression_config_.rectified_images.jpeg_quality);
     }
 
-    // Stereo-specific publishers with shallow queue — large messages, drop stale frames
+    // Stereo-specific publishers with shallow queue — large messages, drop stale frames.
+    // disparity keeps RELIABLE (sock_segmentation_server.cpp:131 depends on
+    // guaranteed delivery, not best-effort) but uses a KeepLast(5) history,
+    // matching that subscriber's cache depth: with depth 1 the sample backing
+    // an in-flight reliable ACK/retransmit could already be overwritten by the
+    // next frame, which measured as ~0.6 Hz effective delivery of an ~0.9 MB/msg
+    // topic vs. 30 Hz for the smaller /points topic on the same QoS.
     if (publish_disparity_) {
-      disparity_pub_ = create_publisher<stereo_msgs::msg::DisparityImage>("disparity", 1);
+      disparity_pub_ = create_publisher<stereo_msgs::msg::DisparityImage>(
+        "disparity", rclcpp::QoS(rclcpp::KeepLast(5)));
     }
     if (publish_pointcloud_) {
       pointcloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("points", 1);
