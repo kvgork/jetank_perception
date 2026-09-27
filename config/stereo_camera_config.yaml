@@ -15,7 +15,6 @@ stereo_camera:
       camera.left_sensor_id: 1
       camera.right_sensor_id: 0
       camera.use_hardware_acceleration: true
-      camera.buffer_size: 3
       camera.processing_threads: 4
       camera.processing_quality: "balanced"
 

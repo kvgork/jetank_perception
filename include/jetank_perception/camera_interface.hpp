@@ -131,9 +131,6 @@ public:
       return false;
     }
 
-    // Set buffer size for performance
-    cap_.set(cv::CAP_PROP_BUFFERSIZE, buffer_size_);
-
     std::cout << "Jetson CSI Camera initialized successfully" << std::endl;
     return true;
   }
@@ -240,10 +237,12 @@ public:
 
   void set_buffer_size(int size) override
   {
+    // CAP_PROP_BUFFERSIZE is a no-op for OpenCV's GStreamer backend; queue
+    // depth is bounded in the pipeline itself via appsink's
+    // max-buffers=1 drop=true (see build_gstreamer_pipeline /
+    // get_fallback_pipeline). Kept as a stored value only so callers built
+    // against this interface still compile.
     buffer_size_ = std::max(1, size);
-    if (cap_.isOpened()) {
-      cap_.set(cv::CAP_PROP_BUFFERSIZE, buffer_size_);
-    }
   }
 
   void enable_threading(bool enable) override
@@ -326,7 +325,7 @@ private:
     templates.push_back(
       {
         "Scaled_Output",
-        "nvarguscamerasrc sensor-id=%d ! video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=30/1 ! nvvidconv ! video/x-raw,width=%d,height=%d,format=BGRx ! videoconvert ! appsink",
+        "nvarguscamerasrc sensor-id=%d ! video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=30/1 ! nvvidconv ! video/x-raw,width=%d,height=%d,format=BGRx ! videoconvert ! appsink max-buffers=1 drop=true sync=false",
         "Sensor with hardware scaling",
         6
       });
@@ -384,7 +383,7 @@ private:
   std::string get_fallback_pipeline(const CameraConfig & config)
   {
     return "nvarguscamerasrc sensor-id=" + std::to_string(config.sensor_id) +
-           " ! videoconvert ! appsink";
+           " ! videoconvert ! appsink max-buffers=1 drop=true sync=false";
   }
 
   std::string create_cache_key(const CameraConfig & config)

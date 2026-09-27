@@ -316,7 +316,6 @@ private:
     declare_parameter("camera.left_sensor_id", 0);
     declare_parameter("camera.right_sensor_id", 1);
     declare_parameter("camera.use_hardware_acceleration", true);
-    declare_parameter("camera.buffer_size", 3);
     declare_parameter("camera.processing_threads", 4);
     declare_parameter("camera.processing_quality", "balanced");
     declare_parameter("camera.flip_images_180", false);
