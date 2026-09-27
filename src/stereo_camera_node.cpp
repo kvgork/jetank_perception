@@ -1158,6 +1158,29 @@ private:
     const cv::Mat & right_rectified,
     const rclcpp::Time & timestamp)
   {
+    // Every consumer of the disparity result is gated on subscriber count (or,
+    // for quality metrics, on the logging cadence); if none of them are active
+    // this frame, the GPU upload/BM/download plus the two cvtColor passes below
+    // would be pure waste, so check first and skip the whole computation.
+    const bool disparity_wanted = publish_disparity_ && disparity_pub_ &&
+      disparity_pub_->get_subscription_count() > 0;
+    const bool pointcloud_wanted = publish_pointcloud_ && pointcloud_pub_ &&
+      pointcloud_pub_->get_subscription_count() > 0;
+    const bool disparity_colored_wanted = quality_config_.visualization.enable &&
+      quality_config_.visualization.publish_disparity_colored &&
+      disparity_colored_pub_ && disparity_colored_pub_->get_subscription_count() > 0;
+    const bool depth_uncertainty_wanted = quality_config_.visualization.enable &&
+      quality_config_.visualization.publish_depth_uncertainty &&
+      depth_uncertainty_pub_ && depth_uncertainty_pub_->get_subscription_count() > 0;
+    const bool quality_metrics_wanted = quality_config_.should_compute_any_metrics() &&
+      (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0);
+
+    if (!disparity_wanted && !pointcloud_wanted && !disparity_colored_wanted &&
+      !depth_uncertainty_wanted && !quality_metrics_wanted)
+    {
+      return;
+    }
+
     // Convert to grayscale if needed (CUDA stereo requires single-channel)
     cv::Mat left_gray, right_gray;
 
