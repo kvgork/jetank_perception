@@ -1030,6 +1030,7 @@ private:
 
     // Quality monitoring: Analyze raw image quality
     if (quality_config_.should_compute_any_metrics() &&
+      quality_config_.compute_metrics.log_interval > 0 &&
       (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0))
     {
       RCLCPP_INFO(get_logger(), "=== QUALITY MONITORING: Frame %d ===", quality_frame_counter_);
@@ -1251,12 +1252,20 @@ private:
   // has a subscriber.
   bool rect_image_consumers_wanted() const
   {
-    return (left_rect_pub_ && left_rect_pub_->get_subscription_count() > 0) ||
-           (right_rect_pub_ && right_rect_pub_->get_subscription_count() > 0) ||
-           (left_rect_compressed_pub_ &&
+    if (!publish_rectified_images_) {
+      return false;
+    }
+    const auto & cc = compression_config_.rectified_images;
+    const bool raw_published = !cc.enabled || cc.mode != "compressed_only";
+    const bool compressed_published = cc.enabled && cc.mode != "raw_only";
+    return (raw_published &&
+           ((left_rect_pub_ && left_rect_pub_->get_subscription_count() > 0) ||
+           (right_rect_pub_ && right_rect_pub_->get_subscription_count() > 0))) ||
+           (compressed_published &&
+           ((left_rect_compressed_pub_ &&
            left_rect_compressed_pub_->get_subscription_count() > 0) ||
            (right_rect_compressed_pub_ &&
-           right_rect_compressed_pub_->get_subscription_count() > 0);
+           right_rect_compressed_pub_->get_subscription_count() > 0)));
   }
 
   void compute_and_publish_disparity_and_pointcloud(
@@ -1954,11 +1963,12 @@ bool StereoCalibration::from_rectified_camera_info_pair(
     dist_coeffs_right_ = cv::Mat::zeros(1, 5, CV_64F);
 
     // Standard OpenCV reprojection matrix (disparity -> 3D), CALIB_ZERO_DISPARITY
-    // convention with positive baseline magnitude:
+    // convention. Row 4 uses -1/Tx with Tx = P2(0,3)/fx (sign follows Tx, so
+    // for the usual right-camera P2(0,3) = -fx*B this is +1/B):
     //   [ 1   0    0        -cx       ]
     //   [ 0   1    0        -cy       ]
     //   [ 0   0    0         fx       ]
-    //   [ 0   0  -1/b   (cx-cx')/b    ]
+    //   [ 0   0  -1/Tx  (cx-cx')/b    ]
     const double b = std::abs(baseline);
     Q_ = cv::Mat::zeros(4, 4, CV_64F);
     Q_.at<double>(0, 0) = 1.0;
