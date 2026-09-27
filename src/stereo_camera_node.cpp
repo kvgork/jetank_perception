@@ -39,11 +39,18 @@ namespace jetson_stereo_camera
 class StereoCalibration
 {
 public:
-  bool load_calibration(
-    const std::string & left_info_url,
-    const std::string & right_info_url,
-    const std::string & stereo_info_url,
-    const cv::Size & image_size);
+  // Load calibration directly from a pair of CameraInfo messages as returned
+  // by CameraInfoManager::getCameraInfo() (which already parses
+  // left/right_camera_info_url). Uses the calibrated K, D, R (rectification)
+  // and P (projection) matrices as-is via cv::initUndistortRectifyMap(),
+  // instead of re-deriving a parallel-camera rectification with
+  // cv::stereoRectify() from a second, independently-parsed calibration file.
+  bool load_from_camera_info(
+    const sensor_msgs::msg::CameraInfo & left_info,
+    const sensor_msgs::msg::CameraInfo & right_info);
+
+  // Fallback calibration used when no calibration files are available.
+  void load_default(const cv::Size & image_size);
 
   void rectify_images(
     const cv::Mat & left_raw, const cv::Mat & right_raw,
@@ -59,7 +66,6 @@ public:
   cv::Mat get_right_dist_coeffs() const {return dist_coeffs_right_;}
 
   // Calibration file operations
-  bool load_calibration_from_yaml(const std::string & yaml_file_path, bool is_left_camera = true);
   bool save_calibration_to_yaml(
     const std::string & yaml_file_path,
     const sensor_msgs::msg::CameraInfo & camera_info);
@@ -94,7 +100,6 @@ private:
 
   void setup_default_calibration();
   void compute_rectification_maps();
-  bool load_stereo_calibration_yaml(const std::string & yaml_file_path);
 };
 
 class JetsonStereoNode : public rclcpp::Node
@@ -235,14 +240,19 @@ public:
     setup_services();
     setup_camera_info_managers();
 
-    // Load calibration
-    if (!calibration_->load_calibration(
-        get_parameter("calibration.left_camera_info_url").as_string(),
-        get_parameter("calibration.right_camera_info_url").as_string(),
-        get_parameter("calibration.stereo_calibration_url").as_string(),
-        cv::Size(camera_config_.width, camera_config_.height)))
+    // Load calibration directly from CameraInfoManager, which already parsed
+    // left/right_camera_info_url (setup_camera_info_managers() above), instead
+    // of re-parsing the same files with a second loader that only reads K/D
+    // and then discards the calibrated R/P behind a parallel-camera
+    // cv::stereoRectify() assumption fed by a separate stereo_calibration.yaml.
+    auto initial_left_info = left_info_manager_->getCameraInfo();
+    auto initial_right_info = right_info_manager_->getCameraInfo();
+    if (!validate_camera_info(initial_left_info) ||
+      !validate_camera_info(initial_right_info) ||
+      !calibration_->load_from_camera_info(initial_left_info, initial_right_info))
     {
       RCLCPP_WARN(get_logger(), "Failed to load calibration, using defaults");
+      calibration_->load_default(cv::Size(camera_config_.width, camera_config_.height));
     }
 
     if (ros_topics_mode) {
@@ -1519,114 +1529,101 @@ private:
 };
 
 // StereoCalibration implementation
-bool StereoCalibration::load_calibration(
-  const std::string & left_info_url,
-  const std::string & right_info_url,
-  const std::string & stereo_info_url,
-  const cv::Size & image_size)
+bool StereoCalibration::load_from_camera_info(
+  const sensor_msgs::msg::CameraInfo & left_info,
+  const sensor_msgs::msg::CameraInfo & right_info)
 {
-  image_size_ = image_size;
+  try {
+    image_size_ = cv::Size(
+      static_cast<int>(left_info.width), static_cast<int>(left_info.height));
 
-  bool left_loaded = false;
-  bool right_loaded = false;
-  bool stereo_loaded = false;
-
-  // Try to load individual camera calibrations
-  if (!left_info_url.empty() && left_info_url.find("file://") == 0) {
-    std::string left_file = left_info_url.substr(7);
-    left_loaded = load_calibration_from_yaml(left_file, true);
-  }
-
-  if (!right_info_url.empty() && right_info_url.find("file://") == 0) {
-    std::string right_file = right_info_url.substr(7);
-    right_loaded = load_calibration_from_yaml(right_file, false);
-  }
-
-  // Try to load stereo calibration
-  if (!stereo_info_url.empty() && stereo_info_url.find("file://") == 0) {
-    std::string stereo_file = stereo_info_url.substr(7);
-    stereo_loaded = load_stereo_calibration_yaml(stereo_file);
-  }
-
-  if (left_loaded && right_loaded) {
-    if (stereo_loaded) {
-      compute_rectification_maps();
-      calibrated_ = true;
-      return true;
-    } else {
-      // Try to compute stereo calibration from individual calibrations
-      setup_default_calibration();
+    // K, D come from the shared from_camera_info_msg() helper (also used by
+    // the set_camera_info service handlers).
+    if (!from_camera_info_msg(left_info, true) || !from_camera_info_msg(right_info, false)) {
       return false;
     }
-  }
 
-  // Fall back to default calibration
+    // R (rectification) and P (projection), unlike K/D, are NOT re-derived:
+    // left/right_camera.yaml already carry the calibrated values (produced by
+    // camera_calibration's stereo tool), so take them as-is rather than
+    // recomputing a parallel-camera rectification via cv::stereoRectify().
+    R1_ = cv::Mat(3, 3, CV_64F);
+    R2_ = cv::Mat(3, 3, CV_64F);
+    for (int i = 0; i < 9; ++i) {
+      R1_.at<double>(i / 3, i % 3) = left_info.r[i];
+      R2_.at<double>(i / 3, i % 3) = right_info.r[i];
+    }
+
+    P1_ = cv::Mat(3, 4, CV_64F);
+    P2_ = cv::Mat(3, 4, CV_64F);
+    for (int i = 0; i < 12; ++i) {
+      P1_.at<double>(i / 4, i % 4) = left_info.p[i];
+      P2_.at<double>(i / 4, i % 4) = right_info.p[i];
+    }
+
+    // Q from the rectified (post-P) intrinsics/baseline, same convention as
+    // from_rectified_camera_info_pair() below: fx=P1[0], cx=P1[2], cy=P1[6],
+    // baseline = -P2[3]/P2[0].
+    const double fx = P1_.at<double>(0, 0);
+    const double cx = P1_.at<double>(0, 2);
+    const double cy = P1_.at<double>(1, 2);
+    const double tx_right = P2_.at<double>(0, 3);
+
+    if (fx <= 0.0) {
+      RCLCPP_ERROR(
+        rclcpp::get_logger("stereo_calibration"),
+        "Invalid fx (%.3f) in left projection matrix", fx);
+      return false;
+    }
+    const double baseline = -tx_right / fx;
+    if (baseline == 0.0) {
+      RCLCPP_ERROR(
+        rclcpp::get_logger("stereo_calibration"),
+        "Zero baseline derived from right projection matrix");
+      return false;
+    }
+    const double b = std::abs(baseline);
+
+    Q_ = cv::Mat::zeros(4, 4, CV_64F);
+    Q_.at<double>(0, 0) = 1.0;
+    Q_.at<double>(0, 3) = -cx;
+    Q_.at<double>(1, 1) = 1.0;
+    Q_.at<double>(1, 3) = -cy;
+    Q_.at<double>(2, 3) = fx;
+    Q_.at<double>(3, 2) = -1.0 / b;
+    Q_.at<double>(3, 3) = 0.0;
+
+    T_ = (cv::Mat_<double>(3, 1) << -b, 0.0, 0.0);
+    R_ = cv::Mat::eye(3, 3, CV_64F);   // not used for rectification; R1_/R2_ are.
+
+    cv::initUndistortRectifyMap(
+      camera_matrix_left_, dist_coeffs_left_, R1_, P1_,
+      image_size_, CV_16SC2, left_map1_, left_map2_);
+    cv::initUndistortRectifyMap(
+      camera_matrix_right_, dist_coeffs_right_, R2_, P2_,
+      image_size_, CV_16SC2, right_map1_, right_map2_);
+
+    calibrated_ = true;
+
+    RCLCPP_INFO(
+      rclcpp::get_logger("stereo_calibration"),
+      "Loaded stereo calibration from CameraInfo (fx=%.2f, cx=%.2f, cy=%.2f, baseline=%.4f m)",
+      fx, cx, cy, b);
+
+    return true;
+
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(
+      rclcpp::get_logger("stereo_calibration"),
+      "Failed to load calibration from CameraInfo: %s", e.what());
+    return false;
+  }
+}
+
+void StereoCalibration::load_default(const cv::Size & image_size)
+{
+  image_size_ = image_size;
   setup_default_calibration();
-  return false;
-}
-
-bool StereoCalibration::load_calibration_from_yaml(
-  const std::string & yaml_file_path,
-  bool is_left_camera)
-{
-  try {
-    YAML::Node config = YAML::LoadFile(yaml_file_path);
-
-    // Load camera matrix
-    auto camera_matrix_data = config["camera_matrix"]["data"].as<std::vector<double>>();
-    cv::Mat camera_matrix = cv::Mat(3, 3, CV_64F, camera_matrix_data.data()).clone();
-
-    // Load distortion coefficients
-    auto distortion_data = config["distortion_coefficients"]["data"].as<std::vector<double>>();
-    cv::Mat dist_coeffs = cv::Mat(
-      1, distortion_data.size(), CV_64F,
-      distortion_data.data()).clone();
-
-    if (is_left_camera) {
-      camera_matrix_left_ = camera_matrix;
-      dist_coeffs_left_ = dist_coeffs;
-    } else {
-      camera_matrix_right_ = camera_matrix;
-      dist_coeffs_right_ = dist_coeffs;
-    }
-
-    return true;
-
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("stereo_calibration"),
-      "Failed to load calibration from %s: %s", yaml_file_path.c_str(), e.what());
-    return false;
-  }
-}
-
-bool StereoCalibration::load_stereo_calibration_yaml(const std::string & yaml_file_path)
-{
-  try {
-    YAML::Node config = YAML::LoadFile(yaml_file_path);
-
-    // Load rotation matrix
-    auto R_data = config["rotation_matrix"]["data"].as<std::vector<double>>();
-    R_ = cv::Mat(3, 3, CV_64F, R_data.data()).clone();
-
-    // Load translation vector
-    auto T_data = config["translation_vector"]["data"].as<std::vector<double>>();
-    T_ = cv::Mat(3, 1, CV_64F, T_data.data()).clone();
-
-    // Load Q matrix if available
-    if (config["Q_matrix"]) {
-      auto Q_data = config["Q_matrix"]["data"].as<std::vector<double>>();
-      Q_ = cv::Mat(4, 4, CV_64F, Q_data.data()).clone();
-    }
-
-    return true;
-
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("stereo_calibration"),
-      "Failed to load stereo calibration from %s: %s", yaml_file_path.c_str(), e.what());
-    return false;
-  }
 }
 
 bool StereoCalibration::save_calibration_to_yaml(
