@@ -109,7 +109,8 @@ private:
 
     try {
       // Convert OpenCV Mat to ROS2 Image message
-      auto msg = jetson_stereo_camera::mat_to_image_msg("bgr8", frame);
+      auto msg = jetson_stereo_camera::mat_to_image_msg(
+        jetson_stereo_camera::raw_frame_encoding(frame), frame);
 
       // Set timestamp
       msg->header.stamp = this->get_clock()->now();

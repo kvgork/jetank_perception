@@ -273,13 +273,11 @@ private:
   // sync=false bounds appsink's queue depth itself, since
   // CAP_PROP_BUFFERSIZE is a no-op for OpenCV's GStreamer backend.
   //
-  // NOTE: nvvidconv's ability to hand BGRx straight to appsink (no
-  // videoconvert in between) could not be verified against real camera
-  // hardware/JetPack in this change (no camera access here); it is only
-  // compile-verified. If a given JetPack's nvvidconv cannot negotiate BGRx
-  // directly into appsink, fall back to camera.format: "GRAY8" as the
-  // config default instead (colour is then genuinely unobtainable without
-  // the CPU stage).
+  // NOTE: nvvidconv -> BGRx in system memory was already the shipped path; this
+  // branch only drops the CPU videoconvert element. The real dependency is
+  // OpenCV's GStreamer appsink caps fallback (>= 4.5.1), which accepts BGRx and
+  // delivers CV_8UC4 frames; both OpenCV builds on the Jetson qualify. Runtime
+  // check: the "Frame channels:" debug print below should report 4.
   //
   // This replaces a template/cache/fallback/compatibility-test system that
   // only ever had one real template: the "cache" was a single entry keyed

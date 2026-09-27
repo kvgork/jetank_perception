@@ -17,6 +17,18 @@ namespace jetson_stereo_camera
 // second OpenCV runtime loaded into the process (see jetank_perception-14);
 // removing these trivial wrap sites is what lets the package drop the
 // cv_bridge dependency entirely.
+/// Encoding label for a raw capture frame by channel count: 1 -> mono8,
+/// 4 -> bgra8 (BGR8-config BGRx capture without CPU videoconvert),
+/// otherwise bgr8 (CPU-videoconvert fallback path).
+inline const char * raw_frame_encoding(const cv::Mat & frame)
+{
+  switch (frame.channels()) {
+    case 1: return "mono8";
+    case 4: return "bgra8";
+    default: return "bgr8";
+  }
+}
+
 inline std::shared_ptr<sensor_msgs::msg::Image> mat_to_image_msg(
   const std::string & encoding, const cv::Mat & image)
 {

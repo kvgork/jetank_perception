@@ -1159,11 +1159,7 @@ private:
   // videoconvert), 3 channels is the CPU-videoconvert BGR fallback path.
   static const char * raw_frame_encoding(const cv::Mat & frame)
   {
-    switch (frame.channels()) {
-      case 1: return "mono8";
-      case 4: return "bgra8";
-      default: return "bgr8";
-    }
+    return jetson_stereo_camera::raw_frame_encoding(frame);
   }
 
   void publish_image(
@@ -1218,7 +1214,15 @@ private:
     } else {
       compressed_msg->format = "png";
       std::vector<int> params = {cv::IMWRITE_PNG_COMPRESSION, compression_config.png_level};
-      cv::imencode(".png", image, buffer, params);
+      if (image.channels() == 4) {
+        // BGRx capture: the 4th byte is undefined padding, not alpha — PNG
+        // would keep it as RGBA, so drop it first.
+        cv::Mat bgr;
+        cv::cvtColor(image, bgr, cv::COLOR_BGRA2BGR);
+        cv::imencode(".png", bgr, buffer, params);
+      } else {
+        cv::imencode(".png", image, buffer, params);
+      }
     }
 
     compressed_msg->data = std::move(buffer);
