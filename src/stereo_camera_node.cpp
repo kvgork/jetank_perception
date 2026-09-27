@@ -408,19 +408,11 @@ private:
     declare_parameter("quality_monitoring.compute_metrics.enable", false);
     declare_parameter("quality_monitoring.compute_metrics.log_interval", 100);
     declare_parameter("quality_monitoring.compute_metrics.publish_to_topic", false);
-    declare_parameter("quality_monitoring.metrics.density", true);
-    declare_parameter("quality_monitoring.metrics.completeness", true);
-    declare_parameter("quality_monitoring.metrics.noise_level", true);
-    declare_parameter("quality_monitoring.metrics.temporal_stability", false);
-    declare_parameter("quality_monitoring.metrics.reprojection_error", false);
     declare_parameter("quality_monitoring.visualization.enable", false);
     declare_parameter("quality_monitoring.visualization.publish_disparity_colored", false);
     declare_parameter("quality_monitoring.visualization.publish_depth_uncertainty", false);
     declare_parameter("quality_monitoring.visualization.publish_density_map", false);
     declare_parameter("quality_monitoring.visualization.publish_epipolar_overlay", false);
-    declare_parameter("quality_monitoring.calibration_validation.enable", false);
-    declare_parameter("quality_monitoring.calibration_validation.validate_on_startup", true);
-    declare_parameter("quality_monitoring.calibration_validation.log_rectification_quality", false);
     declare_parameter("quality_monitoring.thresholds.min_point_density", 0.3);
     declare_parameter("quality_monitoring.thresholds.max_noise_ratio", 0.2);
     declare_parameter("quality_monitoring.thresholds.min_disparity_coverage", 0.5);
@@ -529,15 +521,6 @@ private:
       get_parameter("quality_monitoring.compute_metrics.log_interval").as_int();
     quality_config_.compute_metrics.publish_to_topic =
       get_parameter("quality_monitoring.compute_metrics.publish_to_topic").as_bool();
-    quality_config_.metrics.density = get_parameter("quality_monitoring.metrics.density").as_bool();
-    quality_config_.metrics.completeness =
-      get_parameter("quality_monitoring.metrics.completeness").as_bool();
-    quality_config_.metrics.noise_level =
-      get_parameter("quality_monitoring.metrics.noise_level").as_bool();
-    quality_config_.metrics.temporal_stability =
-      get_parameter("quality_monitoring.metrics.temporal_stability").as_bool();
-    quality_config_.metrics.reprojection_error =
-      get_parameter("quality_monitoring.metrics.reprojection_error").as_bool();
     quality_config_.visualization.enable =
       get_parameter("quality_monitoring.visualization.enable").as_bool();
     quality_config_.visualization.publish_disparity_colored =
@@ -548,13 +531,6 @@ private:
       get_parameter("quality_monitoring.visualization.publish_density_map").as_bool();
     quality_config_.visualization.publish_epipolar_overlay =
       get_parameter("quality_monitoring.visualization.publish_epipolar_overlay").as_bool();
-    quality_config_.calibration_validation.enable =
-      get_parameter("quality_monitoring.calibration_validation.enable").as_bool();
-    quality_config_.calibration_validation.validate_on_startup =
-      get_parameter("quality_monitoring.calibration_validation.validate_on_startup").as_bool();
-    quality_config_.calibration_validation.log_rectification_quality =
-      get_parameter(
-      "quality_monitoring.calibration_validation.log_rectification_quality").as_bool();
     quality_config_.thresholds.min_point_density =
       get_parameter("quality_monitoring.thresholds.min_point_density").as_double();
     quality_config_.thresholds.max_noise_ratio =

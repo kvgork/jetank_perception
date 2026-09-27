@@ -22,8 +22,6 @@ TEST(QualityMonitoringConfig, DefaultsAreDisabledAndValid) {
   // Defaults: master switch off, so no metric/visualization work runs.
   EXPECT_FALSE(cfg.should_compute_any_metrics());
   EXPECT_FALSE(cfg.should_visualize());
-  // Expensive metrics default off.
-  EXPECT_FALSE(cfg.any_expensive_metrics_enabled());
   // Default thresholds are all in range -> validate() passes.
   EXPECT_TRUE(cfg.validate());
 }
@@ -47,15 +45,6 @@ TEST(QualityMonitoringConfig, VisualizeRequiresBothSwitches) {
   EXPECT_FALSE(cfg.should_visualize());    // master off
   cfg.enable = true;
   EXPECT_TRUE(cfg.should_visualize());
-}
-
-TEST(QualityMonitoringConfig, ExpensiveMetricsFlag) {
-  QualityMonitoringConfig cfg;
-  cfg.metrics.temporal_stability = true;
-  EXPECT_TRUE(cfg.any_expensive_metrics_enabled());
-  cfg.metrics.temporal_stability = false;
-  cfg.metrics.reprojection_error = true;
-  EXPECT_TRUE(cfg.any_expensive_metrics_enabled());
 }
 
 TEST(QualityMonitoringConfig, ValidateRejectsBadValues) {
