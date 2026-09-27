@@ -16,7 +16,6 @@
   <depend>sensor_msgs</depend>
   <depend>stereo_msgs</depend>
   <depend>geometry_msgs</depend>
-  <depend>std_srvs</depend>
 
   <depend>vision_msgs</depend>
   <depend>tf2</depend>
@@ -31,7 +30,6 @@
 
   <depend>libopencv-dev</depend>
   <depend>libpcl-all-dev</depend>
-  <depend>libyaml-cpp-dev</depend>
   <!-- GStreamer is only needed at runtime: capture uses OpenCV's
        cv::CAP_GSTREAMER pipeline strings (nvarguscamerasrc on the Jetson),
        never the GStreamer C API. -->

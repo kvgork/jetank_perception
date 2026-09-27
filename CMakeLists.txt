@@ -20,7 +20,6 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(stereo_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
-find_package(std_srvs REQUIRED)
 find_package(camera_info_manager REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(pcl_conversions REQUIRED)
@@ -34,10 +33,6 @@ find_package(PCL REQUIRED)
 
 # No GStreamer dev dependency: camera capture goes through OpenCV's
 # cv::CAP_GSTREAMER pipeline strings, which only needs GStreamer at runtime.
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(YAML_CPP REQUIRED yaml-cpp)
-
-# Add filesystem for C++17
 find_package(Threads REQUIRED)
 
 # Link directories
@@ -57,7 +52,6 @@ endif()
 include_directories(
   include
   ${PCL_INCLUDE_DIRS}
-  ${YAML_CPP_INCLUDE_DIRS}
 )
 
 if(BUILD_TESTING)
@@ -110,7 +104,6 @@ ament_target_dependencies(stereo_camera_node
   sensor_msgs
   stereo_msgs
   geometry_msgs
-  std_srvs
   camera_info_manager
   message_filters
   pcl_conversions
@@ -155,9 +148,7 @@ target_compile_features(stereo_camera_node PUBLIC cxx_std_17)
 target_link_libraries(stereo_camera_node
   ${OpenCV_LIBS}
   ${PCL_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-  Threads::Threads
-  stdc++fs)
+  Threads::Threads)
 
 # Configure camera_node (simple capture node: only rclcpp/sensor_msgs/
 # OpenCV are used; no PCL or yaml-cpp)

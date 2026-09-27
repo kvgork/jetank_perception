@@ -53,11 +53,13 @@ Neither node subscribes to any topics.
 
 ### Services (`stereo_camera_node`)
 
-| Service (relative) | Type | Role |
-|---|---|---|
-| `left/set_camera_info` | `sensor_msgs/srv/SetCameraInfo` | Set and persist left camera intrinsics. |
-| `right/set_camera_info` | `sensor_msgs/srv/SetCameraInfo` | Set and persist right camera intrinsics. |
-| `calibrate_stereo` | `std_srvs/srv/Trigger` | Compute stereo extrinsics from both individually-calibrated cameras. |
+`stereo_camera_node` no longer advertises its own calibration services (the
+custom `left/right/set_camera_info` and `calibrate_stereo` handlers were
+removed: they duplicated/collided with the `set_camera_info` service each
+`camera_info_manager` already advertises, and `calibrate_stereo` produced a
+fake stereo calibration with a hard-coded 6cm baseline). Calibrate with the
+standard `camera_calibration` tool and point `calibration.*_camera_info_url`
+/ `calibration.stereo_calibration_url` at the resulting files.
 
 ### Key parameters
 

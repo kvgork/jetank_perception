@@ -4,8 +4,6 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <stereo_msgs/msg/disparity_image.hpp>  // Correct header
-#include <sensor_msgs/srv/set_camera_info.hpp>
-#include <std_srvs/srv/trigger.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <camera_info_manager/camera_info_manager.hpp>
 #include <message_filters/subscriber.h>
@@ -21,16 +19,11 @@
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/calib3d.hpp>
-#include <yaml-cpp/yaml.h>
-#include <filesystem>
 #include <memory>
 #include <thread>
 #include <mutex>
 #include <atomic>
 #include <chrono>
-#include <fstream>
-#include <sstream>
-#include <iomanip>
 
 namespace jetson_stereo_camera
 {
@@ -75,22 +68,7 @@ public:
   cv::Mat get_left_dist_coeffs() const {return dist_coeffs_left_;}
   cv::Mat get_right_dist_coeffs() const {return dist_coeffs_right_;}
 
-  // Calibration file operations
-  bool save_calibration_to_yaml(
-    const std::string & yaml_file_path,
-    const sensor_msgs::msg::CameraInfo & camera_info);
-
-  // Convert between ROS CameraInfo and OpenCV calibration data
-  sensor_msgs::msg::CameraInfo to_camera_info_msg(
-    const std::string & frame_id,
-    bool is_left = true) const;
   bool from_camera_info_msg(const sensor_msgs::msg::CameraInfo & camera_info, bool is_left = true);
-
-  // Stereo calibration operations
-  bool calibrate_stereo_from_individual(
-    const sensor_msgs::msg::CameraInfo & left_info,
-    const sensor_msgs::msg::CameraInfo & right_info);
-  bool save_stereo_calibration(const std::string & yaml_file_path);
 
   // Build calibration directly from a pair of already-rectified (ideal pinhole)
   // CameraInfo messages, as produced by Gazebo. Uses the projection matrices to
@@ -140,14 +118,12 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
   rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr disparity_pub_;    // Correct type
 
-  // Camera info managers
+  // Camera info managers. Each already advertises its own standard
+  // <ns>/set_camera_info service; this node used to additionally advertise
+  // left/right/calibrate_stereo services that duplicated/collided with
+  // those and produced a fake stereo calibration (see jetank_perception-21).
   std::shared_ptr<camera_info_manager::CameraInfoManager> left_info_manager_;
   std::shared_ptr<camera_info_manager::CameraInfoManager> right_info_manager_;
-
-  // Services
-  rclcpp::Service<sensor_msgs::srv::SetCameraInfo>::SharedPtr left_set_info_service_;
-  rclcpp::Service<sensor_msgs::srv::SetCameraInfo>::SharedPtr right_set_info_service_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stereo_calibrate_service_;
 
   // Processing thread
   std::unique_ptr<std::thread> processing_thread_;
@@ -252,7 +228,6 @@ public:
 
     // Setup ROS2 interfaces
     setup_publishers();
-    setup_services();
     setup_camera_info_managers();
 
     // Load calibration directly from CameraInfoManager, which already parsed
@@ -763,29 +738,6 @@ private:
     }
 
     RCLCPP_INFO(get_logger(), "Publishers created with calibration-compatible topic names");
-  }
-
-  void setup_services()
-  {
-    // Individual camera calibration services
-    left_set_info_service_ = create_service<sensor_msgs::srv::SetCameraInfo>(
-      "left/set_camera_info",
-      std::bind(
-        &JetsonStereoNode::set_left_camera_info, this,
-        std::placeholders::_1, std::placeholders::_2));
-
-    right_set_info_service_ = create_service<sensor_msgs::srv::SetCameraInfo>(
-      "right/set_camera_info",
-      std::bind(
-        &JetsonStereoNode::set_right_camera_info, this,
-        std::placeholders::_1, std::placeholders::_2));
-
-    // Stereo calibration service
-    stereo_calibrate_service_ = create_service<std_srvs::srv::Trigger>(
-      "calibrate_stereo",
-      std::bind(
-        &JetsonStereoNode::calibrate_stereo, this,
-        std::placeholders::_1, std::placeholders::_2));
   }
 
   void setup_camera_info_managers()
@@ -1527,117 +1479,6 @@ private:
     return true;
   }
 
-  void set_left_camera_info(
-    const std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Request> request,
-    std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Response> response)
-  {
-
-    // Validate camera info
-    if (!validate_camera_info(request->camera_info)) {
-      response->success = false;
-      response->status_message = "Invalid camera info parameters";
-      return;
-    }
-
-    // Set camera info in manager
-    response->success = left_info_manager_->setCameraInfo(request->camera_info);
-
-    if (response->success) {
-      // Update calibration with new camera info
-      if (calibration_->from_camera_info_msg(request->camera_info, true)) {
-        // Save calibration to file
-        std::string calib_file = get_parameter("calibration.left_camera_info_url").as_string();
-        if (!calib_file.empty() && calib_file.find("file://") == 0) {
-          std::string file_path = calib_file.substr(7);           // Remove "file://" prefix
-          if (calibration_->save_calibration_to_yaml(file_path, request->camera_info)) {
-            RCLCPP_INFO(get_logger(), "Saved left camera calibration to: %s", file_path.c_str());
-          } else {
-            RCLCPP_WARN(get_logger(), "Failed to save left camera calibration");
-          }
-        }
-      }
-      response->status_message = "Left camera info set and saved successfully";
-      RCLCPP_INFO(get_logger(), "Left camera calibration updated");
-    } else {
-      response->status_message = "Failed to set left camera info";
-    }
-  }
-
-  void set_right_camera_info(
-    const std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Request> request,
-    std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Response> response)
-  {
-
-    // Validate camera info
-    if (!validate_camera_info(request->camera_info)) {
-      response->success = false;
-      response->status_message = "Invalid camera info parameters";
-      return;
-    }
-
-    // Set camera info in manager
-    response->success = right_info_manager_->setCameraInfo(request->camera_info);
-
-    if (response->success) {
-      // Update calibration with new camera info
-      if (calibration_->from_camera_info_msg(request->camera_info, false)) {
-        // Save calibration to file
-        std::string calib_file = get_parameter("calibration.right_camera_info_url").as_string();
-        if (!calib_file.empty() && calib_file.find("file://") == 0) {
-          std::string file_path = calib_file.substr(7);           // Remove "file://" prefix
-          if (calibration_->save_calibration_to_yaml(file_path, request->camera_info)) {
-            RCLCPP_INFO(get_logger(), "Saved right camera calibration to: %s", file_path.c_str());
-          } else {
-            RCLCPP_WARN(get_logger(), "Failed to save right camera calibration");
-          }
-        }
-      }
-      response->status_message = "Right camera info set and saved successfully";
-      RCLCPP_INFO(get_logger(), "Right camera calibration updated");
-    } else {
-      response->status_message = "Failed to set right camera info";
-    }
-  }
-
-  void calibrate_stereo(
-    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
-  {
-
-    // Suppress unused parameter warning
-    (void)request;
-
-    // Check if both individual cameras are calibrated
-    auto left_info = left_info_manager_->getCameraInfo();
-    auto right_info = right_info_manager_->getCameraInfo();
-
-    if (!validate_camera_info(left_info) || !validate_camera_info(right_info)) {
-      response->success = false;
-      response->message = "Both cameras must be individually calibrated first";
-      return;
-    }
-
-    // Perform stereo calibration using existing camera calibrations
-    if (calibration_->calibrate_stereo_from_individual(left_info, right_info)) {
-      // Save stereo calibration
-      std::string stereo_calib_file =
-        get_parameter("calibration.stereo_calibration_url").as_string();
-      if (!stereo_calib_file.empty() && stereo_calib_file.find("file://") == 0) {
-        std::string file_path = stereo_calib_file.substr(7);
-        if (calibration_->save_stereo_calibration(file_path)) {
-          RCLCPP_INFO(get_logger(), "Saved stereo calibration to: %s", file_path.c_str());
-        }
-      }
-
-      response->success = true;
-      response->message = "Stereo calibration completed and saved";
-      RCLCPP_INFO(get_logger(), "Stereo calibration completed successfully");
-    } else {
-      response->success = false;
-      response->message = "Stereo calibration failed";
-      RCLCPP_ERROR(get_logger(), "Stereo calibration failed");
-    }
-  }
 };
 
 // StereoCalibration implementation
@@ -1739,204 +1580,6 @@ void StereoCalibration::load_default(const cv::Size & image_size)
 {
   image_size_ = image_size;
   setup_default_calibration();
-}
-
-bool StereoCalibration::save_calibration_to_yaml(
-  const std::string & yaml_file_path,
-  const sensor_msgs::msg::CameraInfo & camera_info)
-{
-  try {
-    YAML::Node config;
-
-    // Basic information
-    config["image_width"] = camera_info.width;
-    config["image_height"] = camera_info.height;
-    config["camera_name"] = "camera";
-
-    // Camera matrix
-    config["camera_matrix"]["rows"] = 3;
-    config["camera_matrix"]["cols"] = 3;
-    std::vector<double> k_data(camera_info.k.begin(), camera_info.k.end());
-    config["camera_matrix"]["data"] = k_data;
-
-    // Distortion model and coefficients
-    config["distortion_model"] = camera_info.distortion_model;
-    config["distortion_coefficients"]["rows"] = 1;
-    config["distortion_coefficients"]["cols"] = camera_info.d.size();
-    config["distortion_coefficients"]["data"] = camera_info.d;
-
-    // Rectification matrix
-    config["rectification_matrix"]["rows"] = 3;
-    config["rectification_matrix"]["cols"] = 3;
-    std::vector<double> r_data(camera_info.r.begin(), camera_info.r.end());
-    config["rectification_matrix"]["data"] = r_data;
-
-    // Projection matrix
-    config["projection_matrix"]["rows"] = 3;
-    config["projection_matrix"]["cols"] = 4;
-    std::vector<double> p_data(camera_info.p.begin(), camera_info.p.end());
-    config["projection_matrix"]["data"] = p_data;
-
-    // Metadata
-    auto now = std::chrono::system_clock::now();
-    auto time_t = std::chrono::system_clock::to_time_t(now);
-    std::stringstream ss;
-    ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%SZ");
-    config["calibration_date"] = ss.str();
-    config["calibration_version"] = "1.0";
-
-    // Create directory if it doesn't exist
-    std::filesystem::path file_path(yaml_file_path);
-    std::filesystem::create_directories(file_path.parent_path());
-
-    // Save to file
-    std::ofstream file(yaml_file_path);
-    file << config;
-    file.close();
-
-    return true;
-
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("stereo_calibration"),
-      "Failed to save calibration to %s: %s", yaml_file_path.c_str(), e.what());
-    return false;
-  }
-}
-
-bool StereoCalibration::save_stereo_calibration(const std::string & yaml_file_path)
-{
-  try {
-    YAML::Node config;
-
-    // Basic information
-    config["image_width"] = image_size_.width;
-    config["image_height"] = image_size_.height;
-    config["calibration_type"] = "stereo";
-
-    // Rotation matrix
-    config["rotation_matrix"]["rows"] = 3;
-    config["rotation_matrix"]["cols"] = 3;
-    std::vector<double> R_data;
-    for (int i = 0; i < 3; ++i) {
-      for (int j = 0; j < 3; ++j) {
-        R_data.push_back(R_.at<double>(i, j));
-      }
-    }
-    config["rotation_matrix"]["data"] = R_data;
-
-    // Translation vector
-    config["translation_vector"]["rows"] = 3;
-    config["translation_vector"]["cols"] = 1;
-    std::vector<double> T_data;
-    for (int i = 0; i < 3; ++i) {
-      T_data.push_back(T_.at<double>(i, 0));
-    }
-    config["translation_vector"]["data"] = T_data;
-
-    // Q matrix
-    if (!Q_.empty()) {
-      config["Q_matrix"]["rows"] = 4;
-      config["Q_matrix"]["cols"] = 4;
-      std::vector<double> Q_data;
-      for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j) {
-          Q_data.push_back(Q_.at<double>(i, j));
-        }
-      }
-      config["Q_matrix"]["data"] = Q_data;
-    }
-
-    // Metadata
-    auto now = std::chrono::system_clock::now();
-    auto time_t = std::chrono::system_clock::to_time_t(now);
-    std::stringstream ss;
-    ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%SZ");
-    config["calibration_date"] = ss.str();
-    config["calibration_version"] = "1.0";
-
-    // Create directory if it doesn't exist
-    std::filesystem::path file_path(yaml_file_path);
-    std::filesystem::create_directories(file_path.parent_path());
-
-    // Save to file
-    std::ofstream file(yaml_file_path);
-    file << config;
-    file.close();
-
-    return true;
-
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("stereo_calibration"),
-      "Failed to save stereo calibration to %s: %s", yaml_file_path.c_str(), e.what());
-    return false;
-  }
-}
-
-sensor_msgs::msg::CameraInfo StereoCalibration::to_camera_info_msg(
-  const std::string & frame_id,
-  bool is_left) const
-{
-  sensor_msgs::msg::CameraInfo camera_info;
-
-  camera_info.header.frame_id = frame_id;
-  camera_info.width = image_size_.width;
-  camera_info.height = image_size_.height;
-
-  // Set distortion model
-  camera_info.distortion_model = "plumb_bob";
-
-  // Select appropriate matrices
-  const cv::Mat & camera_matrix = is_left ? camera_matrix_left_ : camera_matrix_right_;
-  const cv::Mat & dist_coeffs = is_left ? dist_coeffs_left_ : dist_coeffs_right_;
-
-  // Copy camera matrix (K)
-  for (int i = 0; i < 9; ++i) {
-    camera_info.k[i] = camera_matrix.at<double>(i / 3, i % 3);
-  }
-
-  // Copy distortion coefficients (D)
-  camera_info.d.resize(dist_coeffs.cols);
-  for (int i = 0; i < dist_coeffs.cols; ++i) {
-    camera_info.d[i] = dist_coeffs.at<double>(0, i);
-  }
-
-  // Set rectification matrix (R)
-  const cv::Mat & R_matrix = is_left ? R1_ : R2_;
-  if (!R_matrix.empty()) {
-    for (int i = 0; i < 9; ++i) {
-      camera_info.r[i] = R_matrix.at<double>(i / 3, i % 3);
-    }
-  } else {
-    // Identity matrix if not available
-    for (int i = 0; i < 9; ++i) {
-      camera_info.r[i] = (i % 4 == 0) ? 1.0 : 0.0;
-    }
-  }
-
-  // Set projection matrix (P)
-  const cv::Mat & P_matrix = is_left ? P1_ : P2_;
-  if (!P_matrix.empty()) {
-    for (int i = 0; i < 12; ++i) {
-      camera_info.p[i] = P_matrix.at<double>(i / 4, i % 4);
-    }
-  } else {
-    // Default projection matrix from camera matrix
-    for (int i = 0; i < 12; ++i) {
-      if (i < 3) {
-        camera_info.p[i] = camera_matrix.at<double>(0, i);
-      } else if (i >= 4 && i < 7) {
-        camera_info.p[i] = camera_matrix.at<double>(1, i - 4);
-      } else if (i >= 8 && i < 11) {
-        camera_info.p[i] = camera_matrix.at<double>(2, i - 8);
-      } else {
-        camera_info.p[i] = 0.0;
-      }
-    }
-  }
-
-  return camera_info;
 }
 
 bool StereoCalibration::from_camera_info_msg(
@@ -2073,28 +1716,6 @@ bool StereoCalibration::from_rectified_camera_info_pair(
       "Failed to build calibration from CameraInfo pair: %s", e.what());
     return false;
   }
-}
-
-bool StereoCalibration::calibrate_stereo_from_individual(
-  const sensor_msgs::msg::CameraInfo & left_info,
-  const sensor_msgs::msg::CameraInfo & right_info)
-{
-  // Convert camera info to OpenCV format
-  if (!from_camera_info_msg(left_info, true) || !from_camera_info_msg(right_info, false)) {
-    return false;
-  }
-
-  // Use default stereo calibration parameters
-  // In a real implementation, you would collect image pairs and perform actual stereo calibration
-  // For now, we'll use reasonable defaults based on the individual calibrations
-
-  R_ = cv::Mat::eye(3, 3, CV_64F);    // No rotation between cameras (parallel setup)
-  T_ = (cv::Mat_<double>(3, 1) << -0.06, 0.0, 0.0);    // 6cm baseline assumption
-
-  compute_rectification_maps();
-  calibrated_ = true;
-
-  return true;
 }
 
 void StereoCalibration::setup_default_calibration()
