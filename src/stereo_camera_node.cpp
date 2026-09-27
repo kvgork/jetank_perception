@@ -391,7 +391,12 @@ private:
     declare_parameter("pointcloud.voxel_filter.leaf_size", 0.01);
 
     // Statistical filter
-    declare_parameter("pointcloud.statistical_filter.enable", true);
+    // Default off: StatisticalOutlierRemoval (KD-tree + 30-NN query, two
+    // passes) is the heaviest stage in the cloud pipeline; the only
+    // consumer of this cloud (RViz) tolerates outliers, and Nav2/slam_toolbox
+    // consume /scan from the RPLidar, not this point cloud. Still
+    // overridable via this parameter.
+    declare_parameter("pointcloud.statistical_filter.enable", false);
     declare_parameter("pointcloud.statistical_filter.k_neighbors", 50);
     declare_parameter("pointcloud.statistical_filter.stddev_threshold", 1.0);
 

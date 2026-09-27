@@ -64,7 +64,7 @@ stereo_camera:
       pointcloud.max_processing_threads: 4
       pointcloud.voxel_filter.enable: true
       pointcloud.voxel_filter.leaf_size: 0.005        # 5mm voxels for detail at close range
-      pointcloud.statistical_filter.enable: true
+      pointcloud.statistical_filter.enable: false
       pointcloud.statistical_filter.k_neighbors: 30   # Reduced for faster processing
       pointcloud.statistical_filter.stddev_threshold: 2.0  # More lenient to keep more points
       pointcloud.range_filter.enable: true
