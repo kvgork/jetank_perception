@@ -20,9 +20,6 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(stereo_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
-find_package(std_srvs REQUIRED)
-find_package(cv_bridge REQUIRED)
-find_package(image_transport REQUIRED)
 find_package(camera_info_manager REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(pcl_conversions REQUIRED)
@@ -32,14 +29,16 @@ find_package(tf2_sensor_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(vision_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(PCL REQUIRED)
+# No COMPONENTS means "all PCL modules", including visualization -> VTK,
+# which nothing here uses. Request only what's actually used: common/filters
+# for stereo_camera_node's cloud pipeline and the tests, plus segmentation/
+# search/kdtree/sample_consensus for sock_segmentation_server's plane and
+# cluster extraction. Targets below link the per-component *_LIBRARIES
+# variables PCL provides instead of the broader ${PCL_LIBRARIES}.
+find_package(PCL REQUIRED COMPONENTS common filters segmentation search kdtree sample_consensus)
 
 # No GStreamer dev dependency: camera capture goes through OpenCV's
 # cv::CAP_GSTREAMER pipeline strings, which only needs GStreamer at runtime.
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(YAML_CPP REQUIRED yaml-cpp)
-
-# Add filesystem for C++17
 find_package(Threads REQUIRED)
 
 # Link directories
@@ -59,7 +58,6 @@ endif()
 include_directories(
   include
   ${PCL_INCLUDE_DIRS}
-  ${YAML_CPP_INCLUDE_DIRS}
 )
 
 if(BUILD_TESTING)
@@ -78,14 +76,15 @@ if(BUILD_TESTING)
   ament_add_gtest(test_stereo_math test/test_stereo_math.cpp)
   if(TARGET test_stereo_math)
     target_include_directories(test_stereo_math PRIVATE include ${PCL_INCLUDE_DIRS})
-    target_link_libraries(test_stereo_math ${OpenCV_LIBS} ${PCL_LIBRARIES})
+    target_link_libraries(test_stereo_math
+      ${OpenCV_LIBS} ${PCL_COMMON_LIBRARIES} ${PCL_FILTERS_LIBRARIES})
   endif()
 
   # Pure reprojection-math test (no ROS graph / camera / GPU / TF).
   ament_add_gtest(test_reproject test/test_reproject.cpp)
   if(TARGET test_reproject)
     target_include_directories(test_reproject PRIVATE include ${PCL_INCLUDE_DIRS})
-    target_link_libraries(test_reproject ${PCL_LIBRARIES})
+    target_link_libraries(test_reproject ${PCL_COMMON_LIBRARIES})
     ament_target_dependencies(test_reproject
       sensor_msgs
       stereo_msgs
@@ -112,9 +111,6 @@ ament_target_dependencies(stereo_camera_node
   sensor_msgs
   stereo_msgs
   geometry_msgs
-  std_srvs
-  cv_bridge
-  image_transport
   camera_info_manager
   message_filters
   pcl_conversions
@@ -124,7 +120,6 @@ ament_target_dependencies(stereo_camera_node
 ament_target_dependencies(camera_node
   rclcpp
   sensor_msgs
-  cv_bridge
   OpenCV)
 
 ament_target_dependencies(sock_segmentation_server
@@ -146,7 +141,12 @@ target_include_directories(sock_segmentation_server PRIVATE
   ${PCL_INCLUDE_DIRS})
 
 target_link_libraries(sock_segmentation_server
-  ${PCL_LIBRARIES})
+  ${PCL_COMMON_LIBRARIES}
+  ${PCL_FILTERS_LIBRARIES}
+  ${PCL_SEGMENTATION_LIBRARIES}
+  ${PCL_SEARCH_LIBRARIES}
+  ${PCL_KDTREE_LIBRARIES}
+  ${PCL_SAMPLE_CONSENSUS_LIBRARIES})
 
 target_compile_features(sock_segmentation_server PUBLIC cxx_std_17)
 
@@ -159,13 +159,12 @@ target_compile_features(stereo_camera_node PUBLIC cxx_std_17)
 
 target_link_libraries(stereo_camera_node
   ${OpenCV_LIBS}
-  ${PCL_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-  Threads::Threads
-  stdc++fs)
+  ${PCL_COMMON_LIBRARIES}
+  ${PCL_FILTERS_LIBRARIES}
+  Threads::Threads)
 
 # Configure camera_node (simple capture node: only rclcpp/sensor_msgs/
-# cv_bridge/OpenCV are used; no PCL or yaml-cpp)
+# OpenCV are used; no PCL or yaml-cpp)
 target_include_directories(camera_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)

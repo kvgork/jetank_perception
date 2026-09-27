@@ -4,12 +4,8 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <stereo_msgs/msg/disparity_image.hpp>  // Correct header
-#include <sensor_msgs/srv/set_camera_info.hpp>
-#include <std_srvs/srv/trigger.hpp>
-#include <cv_bridge/cv_bridge.h>
+#include <sensor_msgs/image_encodings.hpp>
 #include <camera_info_manager/camera_info_manager.hpp>
-#include <image_transport/image_transport.hpp>
-#include <image_transport/camera_publisher.hpp>
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
@@ -19,19 +15,15 @@
 #include "jetank_perception/stereo_processing_strategy.hpp"
 #include "jetank_perception/quality_monitoring.hpp"
 #include "jetank_perception/quality_monitor.hpp"
+#include "jetank_perception/image_msg_utils.hpp"
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/calib3d.hpp>
-#include <yaml-cpp/yaml.h>
-#include <filesystem>
 #include <memory>
 #include <thread>
 #include <mutex>
 #include <atomic>
 #include <chrono>
-#include <fstream>
-#include <sstream>
-#include <iomanip>
 
 namespace jetson_stereo_camera
 {
@@ -39,11 +31,18 @@ namespace jetson_stereo_camera
 class StereoCalibration
 {
 public:
-  bool load_calibration(
-    const std::string & left_info_url,
-    const std::string & right_info_url,
-    const std::string & stereo_info_url,
-    const cv::Size & image_size);
+  // Load calibration directly from a pair of CameraInfo messages as returned
+  // by CameraInfoManager::getCameraInfo() (which already parses
+  // left/right_camera_info_url). Uses the calibrated K, D, R (rectification)
+  // and P (projection) matrices as-is via cv::initUndistortRectifyMap(),
+  // instead of re-deriving a parallel-camera rectification with
+  // cv::stereoRectify() from a second, independently-parsed calibration file.
+  bool load_from_camera_info(
+    const sensor_msgs::msg::CameraInfo & left_info,
+    const sensor_msgs::msg::CameraInfo & right_info);
+
+  // Fallback calibration used when no calibration files are available.
+  void load_default(const cv::Size & image_size);
 
   void rectify_images(
     const cv::Mat & left_raw, const cv::Mat & right_raw,
@@ -52,29 +51,24 @@ public:
   cv::Mat get_Q_matrix() const {return Q_;}
   bool is_calibrated() const {return calibrated_;}
 
+  // f (focal length, px) and t (baseline, m) for stereo_msgs/DisparityImage,
+  // read from the same P1_/T_ that compute_rectification_maps() /
+  // load_from_camera_info() / from_rectified_camera_info_pair() already
+  // populate consistently, instead of a separately-declared parameter that
+  // can silently drift from the calibration actually in effect.
+  double get_disparity_f() const {return P1_.empty() ? 0.0 : P1_.at<double>(0, 0);}
+  double get_disparity_baseline() const
+  {
+    return T_.empty() ? 0.0 : std::abs(T_.at<double>(0, 0));
+  }
+
   // Getters for camera matrices
   cv::Mat get_left_camera_matrix() const {return camera_matrix_left_;}
   cv::Mat get_right_camera_matrix() const {return camera_matrix_right_;}
   cv::Mat get_left_dist_coeffs() const {return dist_coeffs_left_;}
   cv::Mat get_right_dist_coeffs() const {return dist_coeffs_right_;}
 
-  // Calibration file operations
-  bool load_calibration_from_yaml(const std::string & yaml_file_path, bool is_left_camera = true);
-  bool save_calibration_to_yaml(
-    const std::string & yaml_file_path,
-    const sensor_msgs::msg::CameraInfo & camera_info);
-
-  // Convert between ROS CameraInfo and OpenCV calibration data
-  sensor_msgs::msg::CameraInfo to_camera_info_msg(
-    const std::string & frame_id,
-    bool is_left = true) const;
   bool from_camera_info_msg(const sensor_msgs::msg::CameraInfo & camera_info, bool is_left = true);
-
-  // Stereo calibration operations
-  bool calibrate_stereo_from_individual(
-    const sensor_msgs::msg::CameraInfo & left_info,
-    const sensor_msgs::msg::CameraInfo & right_info);
-  bool save_stereo_calibration(const std::string & yaml_file_path);
 
   // Build calibration directly from a pair of already-rectified (ideal pinhole)
   // CameraInfo messages, as produced by Gazebo. Uses the projection matrices to
@@ -94,7 +88,6 @@ private:
 
   void setup_default_calibration();
   void compute_rectification_maps();
-  bool load_stereo_calibration_yaml(const std::string & yaml_file_path);
 };
 
 class JetsonStereoNode : public rclcpp::Node
@@ -116,9 +109,6 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr right_info_pub_;
 
-  // image_transport for compression support
-  std::shared_ptr<image_transport::ImageTransport> image_transport_;
-
   // Compressed image publishers (actual JPEG/PNG compression)
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr left_image_compressed_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr right_image_compressed_pub_;
@@ -128,14 +118,22 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
   rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr disparity_pub_;    // Correct type
 
-  // Camera info managers
+  // Camera info managers. Each is constructed on its own sub-node (below) so
+  // its standard set_camera_info service is advertised under left/ and
+  // right/ instead of both managers colliding on the same plain
+  // set_camera_info service when constructed directly on `this` (see
+  // jetank_perception-21). This node used to additionally advertise
+  // left/right/calibrate_stereo services that duplicated/collided with
+  // those and produced a fake stereo calibration.
   std::shared_ptr<camera_info_manager::CameraInfoManager> left_info_manager_;
   std::shared_ptr<camera_info_manager::CameraInfoManager> right_info_manager_;
-
-  // Services
-  rclcpp::Service<sensor_msgs::srv::SetCameraInfo>::SharedPtr left_set_info_service_;
-  rclcpp::Service<sensor_msgs::srv::SetCameraInfo>::SharedPtr right_set_info_service_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stereo_calibrate_service_;
+  // Sub-nodes the managers above are constructed on, so their
+  // set_camera_info services live at left/set_camera_info and
+  // right/set_camera_info (what `camera_calibration --commit` expects).
+  // Kept alive for the lifetime of the managers, which only hold a raw
+  // rclcpp::Node*.
+  rclcpp::Node::SharedPtr left_info_sub_node_;
+  rclcpp::Node::SharedPtr right_info_sub_node_;
 
   // Processing thread
   std::unique_ptr<std::thread> processing_thread_;
@@ -213,6 +211,14 @@ public:
   {
     // Initialize components
     initialize_parameters();
+
+    // Bound OpenCV's internal worker pool (cvtColor/remap/imencode/flip run
+    // through it) instead of leaving it at the default of one thread per
+    // core, which was measured competing with the GStreamer/argus capture
+    // threads and the ROS executor for the same cores. This parameter was
+    // previously declared but never applied.
+    cv::setNumThreads(static_cast<int>(get_parameter("camera.processing_threads").as_int()));
+
     RCLCPP_INFO(
       get_logger(), "Debug: camera.left_sensor_id = %d, camera.flip_images_180 = %s",
       get_parameter("camera.left_sensor_id").as_int(),
@@ -232,17 +238,21 @@ public:
 
     // Setup ROS2 interfaces
     setup_publishers();
-    setup_services();
     setup_camera_info_managers();
 
-    // Load calibration
-    if (!calibration_->load_calibration(
-        get_parameter("calibration.left_camera_info_url").as_string(),
-        get_parameter("calibration.right_camera_info_url").as_string(),
-        get_parameter("calibration.stereo_calibration_url").as_string(),
-        cv::Size(camera_config_.width, camera_config_.height)))
+    // Load calibration directly from CameraInfoManager, which already parsed
+    // left/right_camera_info_url (setup_camera_info_managers() above), instead
+    // of re-parsing the same files with a second loader that only reads K/D
+    // and then discards the calibrated R/P behind a parallel-camera
+    // cv::stereoRectify() assumption fed by a separate stereo_calibration.yaml.
+    auto initial_left_info = left_info_manager_->getCameraInfo();
+    auto initial_right_info = right_info_manager_->getCameraInfo();
+    if (!validate_camera_info(initial_left_info) ||
+      !validate_camera_info(initial_right_info) ||
+      !calibration_->load_from_camera_info(initial_left_info, initial_right_info))
     {
       RCLCPP_WARN(get_logger(), "Failed to load calibration, using defaults");
+      calibration_->load_default(cv::Size(camera_config_.width, camera_config_.height));
     }
 
     if (ros_topics_mode) {
@@ -306,9 +316,7 @@ private:
     declare_parameter("camera.left_sensor_id", 0);
     declare_parameter("camera.right_sensor_id", 1);
     declare_parameter("camera.use_hardware_acceleration", true);
-    declare_parameter("camera.buffer_size", 3);
     declare_parameter("camera.processing_threads", 4);
-    declare_parameter("camera.processing_quality", "balanced");
     declare_parameter("camera.flip_images_180", false);
 
     // ========================================================================
@@ -353,17 +361,10 @@ private:
     declare_parameter("calibration.left_camera_info_url", "");
     declare_parameter("calibration.right_camera_info_url", "");
     declare_parameter("calibration.stereo_calibration_url", "");
-    declare_parameter("calibration.auto_load_calibration", true);
-    declare_parameter("calibration.min_calibration_samples", 30);
-    declare_parameter("calibration.max_reprojection_error", 0.5);
-    declare_parameter("calibration.default.focal_length", 300.0);
-    declare_parameter("calibration.default.baseline", 0.06);
-    declare_parameter("calibration.transforms.publish_camera_transforms", false);
 
     // ========================================================================
     // POINT CLOUD PARAMETERS
     // ========================================================================
-    declare_parameter("pointcloud.enable", true);
     declare_parameter("pointcloud.downsample_factor", 1);
     declare_parameter("pointcloud.max_processing_threads", 4);
 
@@ -372,7 +373,12 @@ private:
     declare_parameter("pointcloud.voxel_filter.leaf_size", 0.01);
 
     // Statistical filter
-    declare_parameter("pointcloud.statistical_filter.enable", true);
+    // Default off: StatisticalOutlierRemoval (KD-tree + 30-NN query, two
+    // passes) is the heaviest stage in the cloud pipeline; the only
+    // consumer of this cloud (RViz) tolerates outliers, and Nav2/slam_toolbox
+    // consume /scan from the RPLidar, not this point cloud. Still
+    // overridable via this parameter.
+    declare_parameter("pointcloud.statistical_filter.enable", false);
     declare_parameter("pointcloud.statistical_filter.k_neighbors", 50);
     declare_parameter("pointcloud.statistical_filter.stddev_threshold", 1.0);
 
@@ -388,34 +394,12 @@ private:
     declare_parameter("publishing.publish_rectified_images", true);
     declare_parameter("publishing.publish_disparity", true);
     declare_parameter("publishing.publish_pointcloud", true);
-    declare_parameter("publishing.qos_depth", 10);
 
     // ========================================================================
     // PERFORMANCE PARAMETERS
     // ========================================================================
     declare_parameter("performance.log_performance", true);
     declare_parameter("performance.performance_log_interval", 100);
-    declare_parameter("performance.enable_multithreading", true);
-    declare_parameter("performance.thread_priority", 0);
-    declare_parameter("performance.enable_memory_optimization", true);
-    declare_parameter("performance.max_memory_usage_mb", 500);
-
-    // ========================================================================
-    // LOGGING PARAMETERS
-    // ========================================================================
-    declare_parameter("logging.log_calibration_info", true);
-    declare_parameter("logging.log_processing_stats", false);
-    declare_parameter("logging.log_frame_drops", true);
-
-    // ========================================================================
-    // DEVELOPMENT PARAMETERS
-    // ========================================================================
-    declare_parameter("development.save_debug_images", false);
-    declare_parameter("development.debug_image_path", "/tmp/stereo_debug");
-    declare_parameter("development.strict_frame_sync", true);
-    declare_parameter("development.max_frame_age_ms", 100);
-    declare_parameter("development.auto_restart_on_error", true);
-    declare_parameter("development.max_consecutive_errors", 5);
 
     // ========================================================================
     // QUALITY MONITORING PARAMETERS
@@ -424,19 +408,11 @@ private:
     declare_parameter("quality_monitoring.compute_metrics.enable", false);
     declare_parameter("quality_monitoring.compute_metrics.log_interval", 100);
     declare_parameter("quality_monitoring.compute_metrics.publish_to_topic", false);
-    declare_parameter("quality_monitoring.metrics.density", true);
-    declare_parameter("quality_monitoring.metrics.completeness", true);
-    declare_parameter("quality_monitoring.metrics.noise_level", true);
-    declare_parameter("quality_monitoring.metrics.temporal_stability", false);
-    declare_parameter("quality_monitoring.metrics.reprojection_error", false);
     declare_parameter("quality_monitoring.visualization.enable", false);
     declare_parameter("quality_monitoring.visualization.publish_disparity_colored", false);
     declare_parameter("quality_monitoring.visualization.publish_depth_uncertainty", false);
     declare_parameter("quality_monitoring.visualization.publish_density_map", false);
     declare_parameter("quality_monitoring.visualization.publish_epipolar_overlay", false);
-    declare_parameter("quality_monitoring.calibration_validation.enable", false);
-    declare_parameter("quality_monitoring.calibration_validation.validate_on_startup", true);
-    declare_parameter("quality_monitoring.calibration_validation.log_rectification_quality", false);
     declare_parameter("quality_monitoring.thresholds.min_point_density", 0.3);
     declare_parameter("quality_monitoring.thresholds.max_noise_ratio", 0.2);
     declare_parameter("quality_monitoring.thresholds.min_disparity_coverage", 0.5);
@@ -545,15 +521,6 @@ private:
       get_parameter("quality_monitoring.compute_metrics.log_interval").as_int();
     quality_config_.compute_metrics.publish_to_topic =
       get_parameter("quality_monitoring.compute_metrics.publish_to_topic").as_bool();
-    quality_config_.metrics.density = get_parameter("quality_monitoring.metrics.density").as_bool();
-    quality_config_.metrics.completeness =
-      get_parameter("quality_monitoring.metrics.completeness").as_bool();
-    quality_config_.metrics.noise_level =
-      get_parameter("quality_monitoring.metrics.noise_level").as_bool();
-    quality_config_.metrics.temporal_stability =
-      get_parameter("quality_monitoring.metrics.temporal_stability").as_bool();
-    quality_config_.metrics.reprojection_error =
-      get_parameter("quality_monitoring.metrics.reprojection_error").as_bool();
     quality_config_.visualization.enable =
       get_parameter("quality_monitoring.visualization.enable").as_bool();
     quality_config_.visualization.publish_disparity_colored =
@@ -564,13 +531,6 @@ private:
       get_parameter("quality_monitoring.visualization.publish_density_map").as_bool();
     quality_config_.visualization.publish_epipolar_overlay =
       get_parameter("quality_monitoring.visualization.publish_epipolar_overlay").as_bool();
-    quality_config_.calibration_validation.enable =
-      get_parameter("quality_monitoring.calibration_validation.enable").as_bool();
-    quality_config_.calibration_validation.validate_on_startup =
-      get_parameter("quality_monitoring.calibration_validation.validate_on_startup").as_bool();
-    quality_config_.calibration_validation.log_rectification_quality =
-      get_parameter(
-      "quality_monitoring.calibration_validation.log_rectification_quality").as_bool();
     quality_config_.thresholds.min_point_density =
       get_parameter("quality_monitoring.thresholds.min_point_density").as_double();
     quality_config_.thresholds.max_noise_ratio =
@@ -736,9 +696,16 @@ private:
         compression_config_.rectified_images.jpeg_quality);
     }
 
-    // Stereo-specific publishers with shallow queue — large messages, drop stale frames
+    // Stereo-specific publishers with shallow queue — large messages, drop stale frames.
+    // disparity keeps RELIABLE (sock_segmentation_server.cpp:131 depends on
+    // guaranteed delivery, not best-effort) but uses a KeepLast(5) history,
+    // matching that subscriber's cache depth: with depth 1 the sample backing
+    // an in-flight reliable ACK/retransmit could already be overwritten by the
+    // next frame, which measured as ~0.6 Hz effective delivery of an ~0.9 MB/msg
+    // topic vs. 30 Hz for the smaller /points topic on the same QoS.
     if (publish_disparity_) {
-      disparity_pub_ = create_publisher<stereo_msgs::msg::DisparityImage>("disparity", 1);
+      disparity_pub_ = create_publisher<stereo_msgs::msg::DisparityImage>(
+        "disparity", rclcpp::QoS(rclcpp::KeepLast(5)));
     }
     if (publish_pointcloud_) {
       pointcloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("points", 1);
@@ -759,36 +726,18 @@ private:
     RCLCPP_INFO(get_logger(), "Publishers created with calibration-compatible topic names");
   }
 
-  void setup_services()
-  {
-    // Individual camera calibration services
-    left_set_info_service_ = create_service<sensor_msgs::srv::SetCameraInfo>(
-      "left/set_camera_info",
-      std::bind(
-        &JetsonStereoNode::set_left_camera_info, this,
-        std::placeholders::_1, std::placeholders::_2));
-
-    right_set_info_service_ = create_service<sensor_msgs::srv::SetCameraInfo>(
-      "right/set_camera_info",
-      std::bind(
-        &JetsonStereoNode::set_right_camera_info, this,
-        std::placeholders::_1, std::placeholders::_2));
-
-    // Stereo calibration service
-    stereo_calibrate_service_ = create_service<std_srvs::srv::Trigger>(
-      "calibrate_stereo",
-      std::bind(
-        &JetsonStereoNode::calibrate_stereo, this,
-        std::placeholders::_1, std::placeholders::_2));
-  }
-
   void setup_camera_info_managers()
   {
+    left_info_sub_node_ = create_sub_node("left");
+    right_info_sub_node_ = create_sub_node("right");
+
     left_info_manager_ = std::make_shared<camera_info_manager::CameraInfoManager>(
-      this, "left", get_parameter("calibration.left_camera_info_url").as_string());
+      left_info_sub_node_.get(), "left",
+      get_parameter("calibration.left_camera_info_url").as_string());
 
     right_info_manager_ = std::make_shared<camera_info_manager::CameraInfoManager>(
-      this, "right", get_parameter("calibration.right_camera_info_url").as_string());
+      right_info_sub_node_.get(), "right",
+      get_parameter("calibration.right_camera_info_url").as_string());
   }
 
   void start_cameras()
@@ -903,6 +852,66 @@ private:
     }
   }
 
+  // Minimal replacement for cv_bridge::toCvCopy(): wraps the message buffer
+  // as a cv::Mat and converts to target_encoding (bgr8/mono8, the only
+  // values this node requests) when needed. Bounded to the 8-bit encodings
+  // this node actually receives on ros_input topics: bgr8 (a bag/replay of
+  // the CSI path) and rgb8 (Gazebo's ros_gz camera bridge, per
+  // jetank_description/urdf/components/camera.xacro format RGB_INT8). Any
+  // other source or target encoding throws std::runtime_error, which the
+  // caller already treats as "drop this frame" (previously a
+  // cv_bridge::Exception, now folded into the same std::exception handler).
+  static cv::Mat decode_image_msg(
+    const ImageMsg::ConstSharedPtr & msg,
+    const std::string & target_encoding)
+  {
+    namespace enc = sensor_msgs::image_encodings;
+
+    if (enc::bitDepth(msg->encoding) != 8) {
+      throw std::runtime_error("unsupported source encoding: " + msg->encoding);
+    }
+    const int channels = enc::numChannels(msg->encoding);
+    const cv::Mat src(
+      static_cast<int>(msg->height), static_cast<int>(msg->width), CV_8UC(channels),
+      const_cast<uint8_t *>(msg->data.data()), msg->step);
+
+    if (msg->encoding == target_encoding) {
+      return src.clone();
+    }
+
+    cv::Mat dst;
+    if (target_encoding == enc::MONO8) {
+      if (msg->encoding == enc::RGB8) {
+        cv::cvtColor(src, dst, cv::COLOR_RGB2GRAY);
+      } else if (msg->encoding == enc::BGR8) {
+        cv::cvtColor(src, dst, cv::COLOR_BGR2GRAY);
+      } else if (msg->encoding == enc::RGBA8) {
+        cv::cvtColor(src, dst, cv::COLOR_RGBA2GRAY);
+      } else if (msg->encoding == enc::BGRA8) {
+        cv::cvtColor(src, dst, cv::COLOR_BGRA2GRAY);
+      } else {
+        throw std::runtime_error(
+                "unsupported conversion " + msg->encoding + " -> " + target_encoding);
+      }
+    } else if (target_encoding == enc::BGR8) {
+      if (msg->encoding == enc::RGB8) {
+        cv::cvtColor(src, dst, cv::COLOR_RGB2BGR);
+      } else if (msg->encoding == enc::RGBA8) {
+        cv::cvtColor(src, dst, cv::COLOR_RGBA2BGR);
+      } else if (msg->encoding == enc::BGRA8) {
+        cv::cvtColor(src, dst, cv::COLOR_BGRA2BGR);
+      } else if (msg->encoding == enc::MONO8) {
+        cv::cvtColor(src, dst, cv::COLOR_GRAY2BGR);
+      } else {
+        throw std::runtime_error(
+                "unsupported conversion " + msg->encoding + " -> " + target_encoding);
+      }
+    } else {
+      throw std::runtime_error("unsupported target encoding: " + target_encoding);
+    }
+    return dst;
+  }
+
   void stereo_image_callback(
     const ImageMsg::ConstSharedPtr & left_msg,
     const ImageMsg::ConstSharedPtr & right_msg)
@@ -913,9 +922,9 @@ private:
       // disparity path, so convert once to mono8 here instead of doing a BGR
       // conversion that compute_and_publish_disparity_and_pointcloud would
       // immediately undo with cvtColor(BGR2GRAY) on every frame.
-      const char * target_encoding = publish_raw_images_ ? "bgr8" : "mono8";
-      cv::Mat left_frame = cv_bridge::toCvCopy(left_msg, target_encoding)->image;
-      cv::Mat right_frame = cv_bridge::toCvCopy(right_msg, target_encoding)->image;
+      const std::string target_encoding = publish_raw_images_ ? "bgr8" : "mono8";
+      cv::Mat left_frame = decode_image_msg(left_msg, target_encoding);
+      cv::Mat right_frame = decode_image_msg(right_msg, target_encoding);
 
       if (left_frame.empty() || right_frame.empty()) {
         return;
@@ -924,9 +933,6 @@ private:
       // Stamp follows the input image header so downstream sync / TF lookups
       // line up with use_sim_time.
       process_stereo_frames(left_frame, right_frame, left_msg->header.stamp);
-    } catch (const cv_bridge::Exception & e) {
-      RCLCPP_ERROR_THROTTLE(
-        get_logger(), *get_clock(), 1000, "cv_bridge conversion failed: %s", e.what());
     } catch (const std::exception & e) {
       RCLCPP_ERROR_THROTTLE(
         get_logger(), *get_clock(), 1000, "Error in stereo image callback: %s", e.what());
@@ -1013,6 +1019,7 @@ private:
 
     // Quality monitoring: Analyze raw image quality
     if (quality_config_.should_compute_any_metrics() &&
+      quality_config_.compute_metrics.log_interval > 0 &&
       (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0))
     {
       RCLCPP_INFO(get_logger(), "=== QUALITY MONITORING: Frame %d ===", quality_frame_counter_);
@@ -1025,25 +1032,37 @@ private:
 
     // Publish raw images (respect compression mode)
     if (publish_raw_images_) {
+      // camera.format == "GRAY8" makes the CSI pipeline capture single-
+      // channel frames directly, and camera.format == "BGR8" (the shipped
+      // default) captures colour-preserving 4-channel BGRx frames straight
+      // from nvvidconv with no CPU videoconvert stage (see make_pipeline());
+      // label the raw topic accordingly instead of always claiming bgr8.
+      const char * left_encoding = raw_frame_encoding(left_frame);
+      const char * right_encoding = raw_frame_encoding(right_frame);
+
       // Publish raw unless mode is compressed_only
       if (!compression_config_.raw_images.enabled ||
         compression_config_.raw_images.mode != "compressed_only")
       {
-        publish_image(left_image_pub_, left_frame, left_frame_id_, timestamp, "bgr8");
-        publish_image(right_image_pub_, right_frame, right_frame_id_, timestamp, "bgr8");
+        publish_image(left_image_pub_, left_frame, left_frame_id_, timestamp, left_encoding);
+        publish_image(right_image_pub_, right_frame, right_frame_id_, timestamp, right_encoding);
       }
 
       // Publish compressed unless mode is raw_only
       if (compression_config_.raw_images.enabled &&
         compression_config_.raw_images.mode != "raw_only")
       {
+        // cv::imencode() accepts 3- and 4-channel (and mono) Mats directly,
+        // so the encoding string here only labels the message for consumers
+        // that pass it through decode_image_msg(); it is not fed to
+        // imencode itself.
         publish_compressed_image(
           left_image_compressed_pub_, left_frame,
-          left_frame_id_, timestamp, "bgr8",
+          left_frame_id_, timestamp, left_encoding,
           compression_config_.raw_images);
         publish_compressed_image(
           right_image_compressed_pub_, right_frame,
-          right_frame_id_, timestamp, "bgr8",
+          right_frame_id_, timestamp, right_encoding,
           compression_config_.raw_images);
       }
     }
@@ -1052,10 +1071,49 @@ private:
     publish_camera_info(left_info_pub_, left_info_manager_, left_frame_id_, timestamp);
     publish_camera_info(right_info_pub_, right_info_manager_, right_frame_id_, timestamp);
 
+    // Compute the disparity/pointcloud/quality-metrics consumer predicates
+    // once per frame (subscriber counts plus logging cadence) so both the
+    // rectification remap below and compute_and_publish_disparity_and_pointcloud()
+    // use the identical result instead of re-deriving it independently. Since
+    // nothing here is cached, the predicate re-enables the skipped work on
+    // the very next frame as soon as a subscriber appears.
+    const DisparityConsumers disparity_consumers = compute_disparity_consumers();
+    const bool rectified_wanted = rect_image_consumers_wanted() || disparity_consumers.any();
+
     // Rectify images if calibrated
     cv::Mat left_rectified, right_rectified;
-    if (calibration_->is_calibrated()) {
-      calibration_->rectify_images(left_frame, right_frame, left_rectified, right_rectified);
+    if (calibration_->is_calibrated() && rectified_wanted) {
+      // Convert to grayscale before remapping: the CSI pipeline delivers BGR
+      // (3-channel, CPU-videoconvert fallback path) or BGRx (4-channel,
+      // colour-preserving BGR8-config path, see make_pipeline()), and
+      // remapping 3-4 channels only to immediately discard the extra
+      // channels in compute_and_publish_disparity_and_pointcloud() wastes
+      // bandwidth. This also fixes left_rect_pub_/right_rect_pub_ below,
+      // which published the still-multi-channel rectified Mat tagged as
+      // "mono8" (a real encoding/step mismatch for any raw subscriber).
+      //
+      // Skipping this whole block (remap included) when rectified_wanted is
+      // false additionally avoids the rectification remap itself when no
+      // rectified-image subscriber and no disparity/pointcloud/diagnostic
+      // consumer exists — that work is just as wasted as the disparity
+      // compute below when nobody reads the output.
+      cv::Mat left_gray_in, right_gray_in;
+      if (left_frame.channels() == 3) {
+        cv::cvtColor(left_frame, left_gray_in, cv::COLOR_BGR2GRAY);
+      } else if (left_frame.channels() == 4) {
+        cv::cvtColor(left_frame, left_gray_in, cv::COLOR_BGRA2GRAY);
+      } else {
+        left_gray_in = left_frame;
+      }
+      if (right_frame.channels() == 3) {
+        cv::cvtColor(right_frame, right_gray_in, cv::COLOR_BGR2GRAY);
+      } else if (right_frame.channels() == 4) {
+        cv::cvtColor(right_frame, right_gray_in, cv::COLOR_BGRA2GRAY);
+      } else {
+        right_gray_in = right_frame;
+      }
+
+      calibration_->rectify_images(left_gray_in, right_gray_in, left_rectified, right_rectified);
 
       // Publish rectified images (respect compression mode)
       if (publish_rectified_images_) {
@@ -1087,11 +1145,21 @@ private:
     }
 
     // Compute and publish disparity and point cloud
-    if (calibration_->is_calibrated()) {
-      compute_and_publish_disparity_and_pointcloud(left_rectified, right_rectified, timestamp);
+    if (calibration_->is_calibrated() && disparity_consumers.any()) {
+      compute_and_publish_disparity_and_pointcloud(
+        left_rectified, right_rectified, timestamp, disparity_consumers);
     }
 
     quality_frame_counter_++;
+  }
+
+  // Encoding label for a frame straight off the CSI pipeline (see
+  // camera_interface.hpp make_pipeline()): 1 channel is a GRAY8 capture,
+  // 4 channels is a BGR8-config colour-preserving BGRx capture (no CPU
+  // videoconvert), 3 channels is the CPU-videoconvert BGR fallback path.
+  static const char * raw_frame_encoding(const cv::Mat & frame)
+  {
+    return jetson_stereo_camera::raw_frame_encoding(frame);
   }
 
   void publish_image(
@@ -1102,7 +1170,7 @@ private:
 
     if (!pub || pub->get_subscription_count() == 0) {return;}   // Don't publish if no subscribers
 
-    auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), encoding, image).toImageMsg();
+    auto msg = mat_to_image_msg(encoding, image);
     msg->header.stamp = timestamp;
     msg->header.frame_id = frame_id;
     pub->publish(*msg);
@@ -1146,24 +1214,107 @@ private:
     } else {
       compressed_msg->format = "png";
       std::vector<int> params = {cv::IMWRITE_PNG_COMPRESSION, compression_config.png_level};
-      cv::imencode(".png", image, buffer, params);
+      if (image.channels() == 4) {
+        // BGRx capture: the 4th byte is undefined padding, not alpha — PNG
+        // would keep it as RGBA, so drop it first.
+        cv::Mat bgr;
+        cv::cvtColor(image, bgr, cv::COLOR_BGRA2BGR);
+        cv::imencode(".png", bgr, buffer, params);
+      } else {
+        cv::imencode(".png", image, buffer, params);
+      }
     }
 
     compressed_msg->data = std::move(buffer);
     pub->publish(std::move(compressed_msg));
   }
 
+  // Subscriber/logging-gated consumers of the rectified stereo pipeline
+  // output. Computed once per frame by compute_disparity_consumers() and
+  // threaded through to compute_and_publish_disparity_and_pointcloud() so
+  // that function's internal checks and its caller's gating (process_stereo_frames)
+  // agree on the same result instead of each re-deriving the five
+  // subscriber/logging predicates independently and risking desync.
+  struct DisparityConsumers
+  {
+    bool disparity = false;
+    bool pointcloud = false;
+    bool disparity_colored = false;
+    bool depth_uncertainty = false;
+    bool quality_metrics = false;
+
+    bool any() const
+    {
+      return disparity || pointcloud || disparity_colored || depth_uncertainty ||
+             quality_metrics;
+    }
+  };
+
+  DisparityConsumers compute_disparity_consumers() const
+  {
+    DisparityConsumers c;
+    c.disparity = publish_disparity_ && disparity_pub_ &&
+      disparity_pub_->get_subscription_count() > 0;
+    c.pointcloud = publish_pointcloud_ && pointcloud_pub_ &&
+      pointcloud_pub_->get_subscription_count() > 0;
+    c.disparity_colored = quality_config_.visualization.enable &&
+      quality_config_.visualization.publish_disparity_colored &&
+      disparity_colored_pub_ && disparity_colored_pub_->get_subscription_count() > 0;
+    c.depth_uncertainty = quality_config_.visualization.enable &&
+      quality_config_.visualization.publish_depth_uncertainty &&
+      depth_uncertainty_pub_ && depth_uncertainty_pub_->get_subscription_count() > 0;
+    // log_interval <= 0 is treated as "never" (rather than modulo-by-zero
+    // UB), matching QualityMonitoringConfig::validate()'s existing treatment
+    // of compute_metrics.log_interval <= 0 as an invalid/disabled setting.
+    c.quality_metrics = quality_config_.should_compute_any_metrics() &&
+      quality_config_.compute_metrics.log_interval > 0 &&
+      (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0);
+    return c;
+  }
+
+  // True when any rectified-image consumer (raw or compressed publisher)
+  // has a subscriber.
+  bool rect_image_consumers_wanted() const
+  {
+    if (!publish_rectified_images_) {
+      return false;
+    }
+    const auto & cc = compression_config_.rectified_images;
+    const bool raw_published = !cc.enabled || cc.mode != "compressed_only";
+    const bool compressed_published = cc.enabled && cc.mode != "raw_only";
+    return (raw_published &&
+           ((left_rect_pub_ && left_rect_pub_->get_subscription_count() > 0) ||
+           (right_rect_pub_ && right_rect_pub_->get_subscription_count() > 0))) ||
+           (compressed_published &&
+           ((left_rect_compressed_pub_ &&
+           left_rect_compressed_pub_->get_subscription_count() > 0) ||
+           (right_rect_compressed_pub_ &&
+           right_rect_compressed_pub_->get_subscription_count() > 0)));
+  }
+
   void compute_and_publish_disparity_and_pointcloud(
     const cv::Mat & left_rectified,
     const cv::Mat & right_rectified,
-    const rclcpp::Time & timestamp)
+    const rclcpp::Time & timestamp,
+    const DisparityConsumers & consumers)
   {
+    // The caller (process_stereo_frames) only invokes this function when
+    // consumers.any() is true; this is kept as a defensive guard so the GPU
+    // upload/BM/download plus the two cvtColor passes below stay skipped if
+    // this function is ever called from elsewhere without that gate.
+    if (!consumers.any()) {
+      return;
+    }
+
     // Convert to grayscale if needed (CUDA stereo requires single-channel)
     cv::Mat left_gray, right_gray;
 
     if (left_rectified.channels() == 3) {
       cv::cvtColor(left_rectified, left_gray, cv::COLOR_BGR2GRAY);
       RCLCPP_DEBUG_ONCE(get_logger(), "Converting left image from BGR to grayscale");
+    } else if (left_rectified.channels() == 4) {
+      cv::cvtColor(left_rectified, left_gray, cv::COLOR_BGRA2GRAY);
+      RCLCPP_DEBUG_ONCE(get_logger(), "Converting left image from BGRA to grayscale");
     } else {
       left_gray = left_rectified;
     }
@@ -1171,6 +1322,9 @@ private:
     if (right_rectified.channels() == 3) {
       cv::cvtColor(right_rectified, right_gray, cv::COLOR_BGR2GRAY);
       RCLCPP_DEBUG_ONCE(get_logger(), "Converting right image from BGR to grayscale");
+    } else if (right_rectified.channels() == 4) {
+      cv::cvtColor(right_rectified, right_gray, cv::COLOR_BGRA2GRAY);
+      RCLCPP_DEBUG_ONCE(get_logger(), "Converting right image from BGRA to grayscale");
     } else {
       right_gray = right_rectified;
     }
@@ -1185,9 +1339,7 @@ private:
     }
 
     // Quality monitoring: Analyze disparity quality
-    if (quality_config_.should_compute_any_metrics() &&
-      (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0))
-    {
+    if (consumers.quality_metrics) {
       RCLCPP_INFO(get_logger(), "--- Stage 3: Disparity Quality ---");
       auto disp_quality = analyze_disparity_quality(disparity);
       disp_quality.log(get_logger());
@@ -1202,15 +1354,12 @@ private:
     }
 
     // Visualization: Publish colored disparity
-    if (quality_config_.visualization.enable &&
-      quality_config_.visualization.publish_disparity_colored &&
-      disparity_colored_pub_ && disparity_colored_pub_->get_subscription_count() > 0)
-    {
+    if (consumers.disparity_colored) {
       cv::Mat colored = create_disparity_colored(
         disparity, stereo_config_.min_disparity,
         stereo_config_.min_disparity + stereo_config_.num_disparities);
       if (!colored.empty()) {
-        auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", colored).toImageMsg();
+        auto msg = mat_to_image_msg("bgr8", colored);
         msg->header.stamp = timestamp;
         msg->header.frame_id = left_frame_id_;
         disparity_colored_pub_->publish(*msg);
@@ -1218,13 +1367,10 @@ private:
     }
 
     // Visualization: Publish depth uncertainty
-    if (quality_config_.visualization.enable &&
-      quality_config_.visualization.publish_depth_uncertainty &&
-      depth_uncertainty_pub_ && depth_uncertainty_pub_->get_subscription_count() > 0)
-    {
+    if (consumers.depth_uncertainty) {
       cv::Mat uncertainty = create_depth_uncertainty_map(disparity, calibration_->get_Q_matrix());
       if (!uncertainty.empty()) {
-        auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", uncertainty).toImageMsg();
+        auto msg = mat_to_image_msg("bgr8", uncertainty);
         msg->header.stamp = timestamp;
         msg->header.frame_id = left_frame_id_;
         depth_uncertainty_pub_->publish(*msg);
@@ -1232,21 +1378,19 @@ private:
     }
 
     // Publish disparity image
-    if (publish_disparity_ && disparity_pub_ && disparity_pub_->get_subscription_count() > 0) {
+    if (consumers.disparity) {
       publish_disparity_image(disparity, timestamp);
     }
 
     // Generate and publish point cloud
-    if (publish_pointcloud_ && pointcloud_pub_ && pointcloud_pub_->get_subscription_count() > 0) {
+    if (consumers.pointcloud) {
       auto pointcloud = stereo_processor_->generate_pointcloud(
         disparity,
         calibration_->get_Q_matrix());
 
       if (pointcloud && !pointcloud->empty()) {
         // Quality monitoring: Analyze point cloud before filtering
-        if (quality_config_.should_compute_any_metrics() &&
-          (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0))
-        {
+        if (consumers.quality_metrics) {
           RCLCPP_INFO(get_logger(), "--- Stage 4: Point Cloud (Before Filtering) ---");
           auto pc_quality_before = analyze_pointcloud_quality(pointcloud);
           pc_quality_before.log(get_logger(), "BEFORE Filtering");
@@ -1256,9 +1400,7 @@ private:
         pointcloud_filter_->filter(pointcloud);
 
         // Quality monitoring: Analyze point cloud after filtering
-        if (quality_config_.should_compute_any_metrics() &&
-          (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0))
-        {
+        if (consumers.quality_metrics) {
           RCLCPP_INFO(get_logger(), "--- Stage 5: Point Cloud (After Filtering) ---");
           auto pc_quality_after = analyze_pointcloud_quality(pointcloud);
           pc_quality_after.log(get_logger(), "AFTER Filtering");
@@ -1321,12 +1463,19 @@ private:
       disparity.convertTo(disparity_float, CV_32F);
     }
 
-    // Fill disparity parameters
-    disparity_msg.f = calibration_->get_left_camera_matrix().at<double>(0, 0);     // fx
-    disparity_msg.t = get_parameter("calibration.default.baseline").as_double();     // baseline
+    // Fill disparity parameters. f/t come from the same rectified P1_/T_ used
+    // to build Q_ (get_disparity_f/get_disparity_baseline), not the
+    // unrectified K and a separate default-baseline parameter that could
+    // (and did) disagree with the calibration actually in effect.
+    disparity_msg.f = calibration_->get_disparity_f();     // fx, rectified
+    disparity_msg.t = calibration_->get_disparity_baseline();     // baseline, m
     disparity_msg.min_disparity = stereo_config_.min_disparity;
     disparity_msg.max_disparity = stereo_config_.min_disparity + stereo_config_.num_disparities;
-    disparity_msg.delta_d = 1.0;
+    // CPU/GPU BM and SGBM all report disparity as CV_16S in 1/16-px units
+    // (see stereo_processing_strategy.hpp); the float conversion above
+    // divides by 16, so the smallest representable step in disparity_float
+    // is 1/16 px, not a whole pixel.
+    disparity_msg.delta_d = (disparity.type() == CV_16S) ? (1.0 / 16.0) : 1.0;
 
     disparity_pub_->publish(disparity_msg);
   }
@@ -1357,426 +1506,107 @@ private:
     return true;
   }
 
-  void set_left_camera_info(
-    const std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Request> request,
-    std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Response> response)
-  {
-
-    // Validate camera info
-    if (!validate_camera_info(request->camera_info)) {
-      response->success = false;
-      response->status_message = "Invalid camera info parameters";
-      return;
-    }
-
-    // Set camera info in manager
-    response->success = left_info_manager_->setCameraInfo(request->camera_info);
-
-    if (response->success) {
-      // Update calibration with new camera info
-      if (calibration_->from_camera_info_msg(request->camera_info, true)) {
-        // Save calibration to file
-        std::string calib_file = get_parameter("calibration.left_camera_info_url").as_string();
-        if (!calib_file.empty() && calib_file.find("file://") == 0) {
-          std::string file_path = calib_file.substr(7);           // Remove "file://" prefix
-          if (calibration_->save_calibration_to_yaml(file_path, request->camera_info)) {
-            RCLCPP_INFO(get_logger(), "Saved left camera calibration to: %s", file_path.c_str());
-          } else {
-            RCLCPP_WARN(get_logger(), "Failed to save left camera calibration");
-          }
-        }
-      }
-      response->status_message = "Left camera info set and saved successfully";
-      RCLCPP_INFO(get_logger(), "Left camera calibration updated");
-    } else {
-      response->status_message = "Failed to set left camera info";
-    }
-  }
-
-  void set_right_camera_info(
-    const std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Request> request,
-    std::shared_ptr<sensor_msgs::srv::SetCameraInfo::Response> response)
-  {
-
-    // Validate camera info
-    if (!validate_camera_info(request->camera_info)) {
-      response->success = false;
-      response->status_message = "Invalid camera info parameters";
-      return;
-    }
-
-    // Set camera info in manager
-    response->success = right_info_manager_->setCameraInfo(request->camera_info);
-
-    if (response->success) {
-      // Update calibration with new camera info
-      if (calibration_->from_camera_info_msg(request->camera_info, false)) {
-        // Save calibration to file
-        std::string calib_file = get_parameter("calibration.right_camera_info_url").as_string();
-        if (!calib_file.empty() && calib_file.find("file://") == 0) {
-          std::string file_path = calib_file.substr(7);           // Remove "file://" prefix
-          if (calibration_->save_calibration_to_yaml(file_path, request->camera_info)) {
-            RCLCPP_INFO(get_logger(), "Saved right camera calibration to: %s", file_path.c_str());
-          } else {
-            RCLCPP_WARN(get_logger(), "Failed to save right camera calibration");
-          }
-        }
-      }
-      response->status_message = "Right camera info set and saved successfully";
-      RCLCPP_INFO(get_logger(), "Right camera calibration updated");
-    } else {
-      response->status_message = "Failed to set right camera info";
-    }
-  }
-
-  void calibrate_stereo(
-    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
-  {
-
-    // Suppress unused parameter warning
-    (void)request;
-
-    // Check if both individual cameras are calibrated
-    auto left_info = left_info_manager_->getCameraInfo();
-    auto right_info = right_info_manager_->getCameraInfo();
-
-    if (!validate_camera_info(left_info) || !validate_camera_info(right_info)) {
-      response->success = false;
-      response->message = "Both cameras must be individually calibrated first";
-      return;
-    }
-
-    // Perform stereo calibration using existing camera calibrations
-    if (calibration_->calibrate_stereo_from_individual(left_info, right_info)) {
-      // Save stereo calibration
-      std::string stereo_calib_file =
-        get_parameter("calibration.stereo_calibration_url").as_string();
-      if (!stereo_calib_file.empty() && stereo_calib_file.find("file://") == 0) {
-        std::string file_path = stereo_calib_file.substr(7);
-        if (calibration_->save_stereo_calibration(file_path)) {
-          RCLCPP_INFO(get_logger(), "Saved stereo calibration to: %s", file_path.c_str());
-        }
-      }
-
-      response->success = true;
-      response->message = "Stereo calibration completed and saved";
-      RCLCPP_INFO(get_logger(), "Stereo calibration completed successfully");
-    } else {
-      response->success = false;
-      response->message = "Stereo calibration failed";
-      RCLCPP_ERROR(get_logger(), "Stereo calibration failed");
-    }
-  }
 };
 
 // StereoCalibration implementation
-bool StereoCalibration::load_calibration(
-  const std::string & left_info_url,
-  const std::string & right_info_url,
-  const std::string & stereo_info_url,
-  const cv::Size & image_size)
+bool StereoCalibration::load_from_camera_info(
+  const sensor_msgs::msg::CameraInfo & left_info,
+  const sensor_msgs::msg::CameraInfo & right_info)
 {
-  image_size_ = image_size;
+  try {
+    image_size_ = cv::Size(
+      static_cast<int>(left_info.width), static_cast<int>(left_info.height));
 
-  bool left_loaded = false;
-  bool right_loaded = false;
-  bool stereo_loaded = false;
-
-  // Try to load individual camera calibrations
-  if (!left_info_url.empty() && left_info_url.find("file://") == 0) {
-    std::string left_file = left_info_url.substr(7);
-    left_loaded = load_calibration_from_yaml(left_file, true);
-  }
-
-  if (!right_info_url.empty() && right_info_url.find("file://") == 0) {
-    std::string right_file = right_info_url.substr(7);
-    right_loaded = load_calibration_from_yaml(right_file, false);
-  }
-
-  // Try to load stereo calibration
-  if (!stereo_info_url.empty() && stereo_info_url.find("file://") == 0) {
-    std::string stereo_file = stereo_info_url.substr(7);
-    stereo_loaded = load_stereo_calibration_yaml(stereo_file);
-  }
-
-  if (left_loaded && right_loaded) {
-    if (stereo_loaded) {
-      compute_rectification_maps();
-      calibrated_ = true;
-      return true;
-    } else {
-      // Try to compute stereo calibration from individual calibrations
-      setup_default_calibration();
+    // K, D come from the shared from_camera_info_msg() helper (also used by
+    // the set_camera_info service handlers).
+    if (!from_camera_info_msg(left_info, true) || !from_camera_info_msg(right_info, false)) {
       return false;
     }
-  }
 
-  // Fall back to default calibration
+    // R (rectification) and P (projection), unlike K/D, are NOT re-derived:
+    // left/right_camera.yaml already carry the calibrated values (produced by
+    // camera_calibration's stereo tool), so take them as-is rather than
+    // recomputing a parallel-camera rectification via cv::stereoRectify().
+    R1_ = cv::Mat(3, 3, CV_64F);
+    R2_ = cv::Mat(3, 3, CV_64F);
+    for (int i = 0; i < 9; ++i) {
+      R1_.at<double>(i / 3, i % 3) = left_info.r[i];
+      R2_.at<double>(i / 3, i % 3) = right_info.r[i];
+    }
+
+    P1_ = cv::Mat(3, 4, CV_64F);
+    P2_ = cv::Mat(3, 4, CV_64F);
+    for (int i = 0; i < 12; ++i) {
+      P1_.at<double>(i / 4, i % 4) = left_info.p[i];
+      P2_.at<double>(i / 4, i % 4) = right_info.p[i];
+    }
+
+    // Q from the rectified (post-P) intrinsics/baseline, same convention as
+    // from_rectified_camera_info_pair() below: fx=P1[0], cx=P1[2], cy=P1[6],
+    // baseline = -P2[3]/P2[0].
+    const double fx = P1_.at<double>(0, 0);
+    const double cx = P1_.at<double>(0, 2);
+    const double cy = P1_.at<double>(1, 2);
+    const double tx_right = P2_.at<double>(0, 3);
+
+    if (fx <= 0.0) {
+      RCLCPP_ERROR(
+        rclcpp::get_logger("stereo_calibration"),
+        "Invalid fx (%.3f) in left projection matrix", fx);
+      return false;
+    }
+    const double baseline = -tx_right / fx;
+    if (baseline == 0.0) {
+      RCLCPP_ERROR(
+        rclcpp::get_logger("stereo_calibration"),
+        "Zero baseline derived from right projection matrix");
+      return false;
+    }
+    const double b = std::abs(baseline);
+
+    Q_ = cv::Mat::zeros(4, 4, CV_64F);
+    Q_.at<double>(0, 0) = 1.0;
+    Q_.at<double>(0, 3) = -cx;
+    Q_.at<double>(1, 1) = 1.0;
+    Q_.at<double>(1, 3) = -cy;
+    Q_.at<double>(2, 3) = fx;
+    // Q(3,2) = -1/Tx per OpenCV's stereoRectify convention, where
+    // Tx = P2(0,3)/fx (NOT the abs-valued `baseline` above, which would
+    // silently flip the sign whenever Tx is negative, as it is here).
+    Q_.at<double>(3, 2) = -fx / tx_right;
+    Q_.at<double>(3, 3) = 0.0;
+
+    T_ = (cv::Mat_<double>(3, 1) << -b, 0.0, 0.0);
+    R_ = cv::Mat::eye(3, 3, CV_64F);   // not used for rectification; R1_/R2_ are.
+
+    cv::initUndistortRectifyMap(
+      camera_matrix_left_, dist_coeffs_left_, R1_, P1_,
+      image_size_, CV_16SC2, left_map1_, left_map2_);
+    cv::initUndistortRectifyMap(
+      camera_matrix_right_, dist_coeffs_right_, R2_, P2_,
+      image_size_, CV_16SC2, right_map1_, right_map2_);
+
+    calibrated_ = true;
+
+    RCLCPP_INFO(
+      rclcpp::get_logger("stereo_calibration"),
+      "Loaded stereo calibration from CameraInfo (fx=%.2f, cx=%.2f, cy=%.2f, baseline=%.4f m)",
+      fx, cx, cy, b);
+
+    return true;
+
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(
+      rclcpp::get_logger("stereo_calibration"),
+      "Failed to load calibration from CameraInfo: %s", e.what());
+    return false;
+  }
+}
+
+void StereoCalibration::load_default(const cv::Size & image_size)
+{
+  image_size_ = image_size;
   setup_default_calibration();
-  return false;
-}
-
-bool StereoCalibration::load_calibration_from_yaml(
-  const std::string & yaml_file_path,
-  bool is_left_camera)
-{
-  try {
-    YAML::Node config = YAML::LoadFile(yaml_file_path);
-
-    // Load camera matrix
-    auto camera_matrix_data = config["camera_matrix"]["data"].as<std::vector<double>>();
-    cv::Mat camera_matrix = cv::Mat(3, 3, CV_64F, camera_matrix_data.data()).clone();
-
-    // Load distortion coefficients
-    auto distortion_data = config["distortion_coefficients"]["data"].as<std::vector<double>>();
-    cv::Mat dist_coeffs = cv::Mat(
-      1, distortion_data.size(), CV_64F,
-      distortion_data.data()).clone();
-
-    if (is_left_camera) {
-      camera_matrix_left_ = camera_matrix;
-      dist_coeffs_left_ = dist_coeffs;
-    } else {
-      camera_matrix_right_ = camera_matrix;
-      dist_coeffs_right_ = dist_coeffs;
-    }
-
-    return true;
-
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("stereo_calibration"),
-      "Failed to load calibration from %s: %s", yaml_file_path.c_str(), e.what());
-    return false;
-  }
-}
-
-bool StereoCalibration::load_stereo_calibration_yaml(const std::string & yaml_file_path)
-{
-  try {
-    YAML::Node config = YAML::LoadFile(yaml_file_path);
-
-    // Load rotation matrix
-    auto R_data = config["rotation_matrix"]["data"].as<std::vector<double>>();
-    R_ = cv::Mat(3, 3, CV_64F, R_data.data()).clone();
-
-    // Load translation vector
-    auto T_data = config["translation_vector"]["data"].as<std::vector<double>>();
-    T_ = cv::Mat(3, 1, CV_64F, T_data.data()).clone();
-
-    // Load Q matrix if available
-    if (config["Q_matrix"]) {
-      auto Q_data = config["Q_matrix"]["data"].as<std::vector<double>>();
-      Q_ = cv::Mat(4, 4, CV_64F, Q_data.data()).clone();
-    }
-
-    return true;
-
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("stereo_calibration"),
-      "Failed to load stereo calibration from %s: %s", yaml_file_path.c_str(), e.what());
-    return false;
-  }
-}
-
-bool StereoCalibration::save_calibration_to_yaml(
-  const std::string & yaml_file_path,
-  const sensor_msgs::msg::CameraInfo & camera_info)
-{
-  try {
-    YAML::Node config;
-
-    // Basic information
-    config["image_width"] = camera_info.width;
-    config["image_height"] = camera_info.height;
-    config["camera_name"] = "camera";
-
-    // Camera matrix
-    config["camera_matrix"]["rows"] = 3;
-    config["camera_matrix"]["cols"] = 3;
-    std::vector<double> k_data(camera_info.k.begin(), camera_info.k.end());
-    config["camera_matrix"]["data"] = k_data;
-
-    // Distortion model and coefficients
-    config["distortion_model"] = camera_info.distortion_model;
-    config["distortion_coefficients"]["rows"] = 1;
-    config["distortion_coefficients"]["cols"] = camera_info.d.size();
-    config["distortion_coefficients"]["data"] = camera_info.d;
-
-    // Rectification matrix
-    config["rectification_matrix"]["rows"] = 3;
-    config["rectification_matrix"]["cols"] = 3;
-    std::vector<double> r_data(camera_info.r.begin(), camera_info.r.end());
-    config["rectification_matrix"]["data"] = r_data;
-
-    // Projection matrix
-    config["projection_matrix"]["rows"] = 3;
-    config["projection_matrix"]["cols"] = 4;
-    std::vector<double> p_data(camera_info.p.begin(), camera_info.p.end());
-    config["projection_matrix"]["data"] = p_data;
-
-    // Metadata
-    auto now = std::chrono::system_clock::now();
-    auto time_t = std::chrono::system_clock::to_time_t(now);
-    std::stringstream ss;
-    ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%SZ");
-    config["calibration_date"] = ss.str();
-    config["calibration_version"] = "1.0";
-
-    // Create directory if it doesn't exist
-    std::filesystem::path file_path(yaml_file_path);
-    std::filesystem::create_directories(file_path.parent_path());
-
-    // Save to file
-    std::ofstream file(yaml_file_path);
-    file << config;
-    file.close();
-
-    return true;
-
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("stereo_calibration"),
-      "Failed to save calibration to %s: %s", yaml_file_path.c_str(), e.what());
-    return false;
-  }
-}
-
-bool StereoCalibration::save_stereo_calibration(const std::string & yaml_file_path)
-{
-  try {
-    YAML::Node config;
-
-    // Basic information
-    config["image_width"] = image_size_.width;
-    config["image_height"] = image_size_.height;
-    config["calibration_type"] = "stereo";
-
-    // Rotation matrix
-    config["rotation_matrix"]["rows"] = 3;
-    config["rotation_matrix"]["cols"] = 3;
-    std::vector<double> R_data;
-    for (int i = 0; i < 3; ++i) {
-      for (int j = 0; j < 3; ++j) {
-        R_data.push_back(R_.at<double>(i, j));
-      }
-    }
-    config["rotation_matrix"]["data"] = R_data;
-
-    // Translation vector
-    config["translation_vector"]["rows"] = 3;
-    config["translation_vector"]["cols"] = 1;
-    std::vector<double> T_data;
-    for (int i = 0; i < 3; ++i) {
-      T_data.push_back(T_.at<double>(i, 0));
-    }
-    config["translation_vector"]["data"] = T_data;
-
-    // Q matrix
-    if (!Q_.empty()) {
-      config["Q_matrix"]["rows"] = 4;
-      config["Q_matrix"]["cols"] = 4;
-      std::vector<double> Q_data;
-      for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j) {
-          Q_data.push_back(Q_.at<double>(i, j));
-        }
-      }
-      config["Q_matrix"]["data"] = Q_data;
-    }
-
-    // Metadata
-    auto now = std::chrono::system_clock::now();
-    auto time_t = std::chrono::system_clock::to_time_t(now);
-    std::stringstream ss;
-    ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%SZ");
-    config["calibration_date"] = ss.str();
-    config["calibration_version"] = "1.0";
-
-    // Create directory if it doesn't exist
-    std::filesystem::path file_path(yaml_file_path);
-    std::filesystem::create_directories(file_path.parent_path());
-
-    // Save to file
-    std::ofstream file(yaml_file_path);
-    file << config;
-    file.close();
-
-    return true;
-
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("stereo_calibration"),
-      "Failed to save stereo calibration to %s: %s", yaml_file_path.c_str(), e.what());
-    return false;
-  }
-}
-
-sensor_msgs::msg::CameraInfo StereoCalibration::to_camera_info_msg(
-  const std::string & frame_id,
-  bool is_left) const
-{
-  sensor_msgs::msg::CameraInfo camera_info;
-
-  camera_info.header.frame_id = frame_id;
-  camera_info.width = image_size_.width;
-  camera_info.height = image_size_.height;
-
-  // Set distortion model
-  camera_info.distortion_model = "plumb_bob";
-
-  // Select appropriate matrices
-  const cv::Mat & camera_matrix = is_left ? camera_matrix_left_ : camera_matrix_right_;
-  const cv::Mat & dist_coeffs = is_left ? dist_coeffs_left_ : dist_coeffs_right_;
-
-  // Copy camera matrix (K)
-  for (int i = 0; i < 9; ++i) {
-    camera_info.k[i] = camera_matrix.at<double>(i / 3, i % 3);
-  }
-
-  // Copy distortion coefficients (D)
-  camera_info.d.resize(dist_coeffs.cols);
-  for (int i = 0; i < dist_coeffs.cols; ++i) {
-    camera_info.d[i] = dist_coeffs.at<double>(0, i);
-  }
-
-  // Set rectification matrix (R)
-  const cv::Mat & R_matrix = is_left ? R1_ : R2_;
-  if (!R_matrix.empty()) {
-    for (int i = 0; i < 9; ++i) {
-      camera_info.r[i] = R_matrix.at<double>(i / 3, i % 3);
-    }
-  } else {
-    // Identity matrix if not available
-    for (int i = 0; i < 9; ++i) {
-      camera_info.r[i] = (i % 4 == 0) ? 1.0 : 0.0;
-    }
-  }
-
-  // Set projection matrix (P)
-  const cv::Mat & P_matrix = is_left ? P1_ : P2_;
-  if (!P_matrix.empty()) {
-    for (int i = 0; i < 12; ++i) {
-      camera_info.p[i] = P_matrix.at<double>(i / 4, i % 4);
-    }
-  } else {
-    // Default projection matrix from camera matrix
-    for (int i = 0; i < 12; ++i) {
-      if (i < 3) {
-        camera_info.p[i] = camera_matrix.at<double>(0, i);
-      } else if (i >= 4 && i < 7) {
-        camera_info.p[i] = camera_matrix.at<double>(1, i - 4);
-      } else if (i >= 8 && i < 11) {
-        camera_info.p[i] = camera_matrix.at<double>(2, i - 8);
-      } else {
-        camera_info.p[i] = 0.0;
-      }
-    }
-  }
-
-  return camera_info;
 }
 
 bool StereoCalibration::from_camera_info_msg(
@@ -1861,11 +1691,12 @@ bool StereoCalibration::from_rectified_camera_info_pair(
     dist_coeffs_right_ = cv::Mat::zeros(1, 5, CV_64F);
 
     // Standard OpenCV reprojection matrix (disparity -> 3D), CALIB_ZERO_DISPARITY
-    // convention with positive baseline magnitude:
+    // convention. Row 4 uses -1/Tx with Tx = P2(0,3)/fx (sign follows Tx, so
+    // for the usual right-camera P2(0,3) = -fx*B this is +1/B):
     //   [ 1   0    0        -cx       ]
     //   [ 0   1    0        -cy       ]
     //   [ 0   0    0         fx       ]
-    //   [ 0   0  -1/b   (cx-cx')/b    ]
+    //   [ 0   0  -1/Tx  (cx-cx')/b    ]
     const double b = std::abs(baseline);
     Q_ = cv::Mat::zeros(4, 4, CV_64F);
     Q_.at<double>(0, 0) = 1.0;
@@ -1873,7 +1704,10 @@ bool StereoCalibration::from_rectified_camera_info_pair(
     Q_.at<double>(1, 1) = 1.0;
     Q_.at<double>(1, 3) = -cy;
     Q_.at<double>(2, 3) = fx;
-    Q_.at<double>(3, 2) = -1.0 / b;
+    // Q(3,2) = -1/Tx per OpenCV's stereoRectify convention, where
+    // Tx = Pr[3]/fx (NOT the abs-valued `baseline` above, which would
+    // silently flip the sign whenever Tx is negative, as it is here).
+    Q_.at<double>(3, 2) = -fx / Pr[3];
     Q_.at<double>(3, 3) = 0.0;
 
     // Images are already rectified: rectification is a passthrough (identity).
@@ -1909,28 +1743,6 @@ bool StereoCalibration::from_rectified_camera_info_pair(
       "Failed to build calibration from CameraInfo pair: %s", e.what());
     return false;
   }
-}
-
-bool StereoCalibration::calibrate_stereo_from_individual(
-  const sensor_msgs::msg::CameraInfo & left_info,
-  const sensor_msgs::msg::CameraInfo & right_info)
-{
-  // Convert camera info to OpenCV format
-  if (!from_camera_info_msg(left_info, true) || !from_camera_info_msg(right_info, false)) {
-    return false;
-  }
-
-  // Use default stereo calibration parameters
-  // In a real implementation, you would collect image pairs and perform actual stereo calibration
-  // For now, we'll use reasonable defaults based on the individual calibrations
-
-  R_ = cv::Mat::eye(3, 3, CV_64F);    // No rotation between cameras (parallel setup)
-  T_ = (cv::Mat_<double>(3, 1) << -0.06, 0.0, 0.0);    // 6cm baseline assumption
-
-  compute_rectification_maps();
-  calibrated_ = true;
-
-  return true;
 }
 
 void StereoCalibration::setup_default_calibration()

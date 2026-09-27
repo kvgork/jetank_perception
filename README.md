@@ -16,7 +16,7 @@ This package (`jetank_perception`, build type `ament_cmake`) provides C++ camera
 | `camera_node` | `camera_node` | Single CSI camera capture; publishes a rate-limited BGR8 image stream. |
 | `sock_segmentation_server` | `sock_segmentation_server` | `SegmentSocks` action server: reprojects detector bbox ROIs from the cached disparity image into a 3D sock blob in a requested frame. |
 
-> **Topic namespacing:** `stereo_camera.launch.py` launches `stereo_camera_node` under the namespace `stereo_camera` (default), so the topics/services below appear as `/stereo_camera/<name>` at runtime. `single_camera.launch.py` / `simple_camera.launch.py` launch `camera_node` with an empty namespace, so `camera/image_raw` resolves to `/camera/image_raw`. No launch file applies topic remappings (the stereo launch file has only commented-out examples).
+> **Topic namespacing:** `stereo_camera.launch.py` launches `stereo_camera_node` under the namespace `stereo_camera` (default), so the topics/services below appear as `/stereo_camera/<name>` at runtime. `single_camera.launch.py` launches `camera_node` with an empty namespace, so `camera/image_raw` resolves to `/camera/image_raw`. No launch file applies topic remappings (the stereo launch file has only commented-out examples).
 
 > **Input source:** `stereo_camera_node` selects its capture path via the `input_source` parameter. `csi` (default) opens the dual CSI cameras directly. `ros_topics` (simulation) instead time-syncs an incoming stereo image stream — e.g. Gazebo's `left/image_raw` + `right/image_raw` — and feeds those frames through the same rectify/disparity/point-cloud pipeline. The subscribed topics are configurable via `ros_input.left_image_topic` / `right_image_topic` / `left_info_topic` / `right_info_topic`.
 
@@ -53,11 +53,13 @@ Neither node subscribes to any topics.
 
 ### Services (`stereo_camera_node`)
 
-| Service (relative) | Type | Role |
-|---|---|---|
-| `left/set_camera_info` | `sensor_msgs/srv/SetCameraInfo` | Set and persist left camera intrinsics. |
-| `right/set_camera_info` | `sensor_msgs/srv/SetCameraInfo` | Set and persist right camera intrinsics. |
-| `calibrate_stereo` | `std_srvs/srv/Trigger` | Compute stereo extrinsics from both individually-calibrated cameras. |
+`stereo_camera_node` no longer advertises its own calibration services (the
+custom `left/right/set_camera_info` and `calibrate_stereo` handlers were
+removed: they duplicated/collided with the `set_camera_info` service each
+`camera_info_manager` already advertises, and `calibrate_stereo` produced a
+fake stereo calibration with a hard-coded 6cm baseline). Calibrate with the
+standard `camera_calibration` tool and point `calibration.*_camera_info_url`
+/ `calibration.stereo_calibration_url` at the resulting files.
 
 ### Key parameters
 
@@ -98,8 +100,7 @@ Neither node subscribes to any topics.
 | Launch file | Brings up |
 |---|---|
 | `stereo_camera.launch.py` | `stereo_camera_node` (namespace `stereo_camera`) + optional static TF publishers for `camera_left_link` / `camera_right_link`. |
-| `single_camera.launch.py` | `camera_node` (configurable name/namespace) + optional RViz2 and image_view. |
-| `simple_camera.launch.py` | `camera_node` with fixed defaults for quick testing. |
+| `single_camera.launch.py` | `camera_node` (configurable name/namespace). |
 
 ## Sock segmentation (`sock_segmentation_server`)
 

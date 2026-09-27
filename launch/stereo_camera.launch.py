@@ -67,36 +67,6 @@ def generate_launch_description():
         description='Log level for the node'
     )
 
-    # Camera resolution overrides (optional - will override YAML if provided)
-    camera_width_arg = DeclareLaunchArgument(
-        'camera_width',
-        default_value='',
-        description='Override camera width from config file (leave empty to use config file value)'
-    )
-
-    camera_height_arg = DeclareLaunchArgument(
-        'camera_height',
-        default_value='',
-        description='Override camera height from config file '
-                    '(leave empty to use config file value)'
-    )
-
-    camera_fps_arg = DeclareLaunchArgument(
-        'camera_fps',
-        default_value='',
-        description='Override camera FPS from config file '
-                    '(leave empty to use config file value)'
-    )
-
-    # Stereo algorithm override
-    stereo_algorithm_arg = DeclareLaunchArgument(
-        'stereo_algorithm',
-        default_value='',
-        choices=['', 'GPU_BM', 'CPU_BM', 'GPU_SGBM', 'CPU_SGBM'],
-        description='Override stereo algorithm from config file '
-                    '(leave empty to use config file value)'
-    )
-
     # Transform publishing argument
     publish_camera_transforms_arg = DeclareLaunchArgument(
         'publish_camera_transforms',
@@ -104,32 +74,20 @@ def generate_launch_description():
         description='Publish static transforms for camera frames'
     )
 
-    # Calibration file overrides
+    # Calibration file overrides. Defaulting to the resolved absolute file
+    # URLs (rather than '') means these are genuinely overridable from the
+    # command line while keeping today's default behaviour unchanged.
     left_camera_info_url_arg = DeclareLaunchArgument(
         'left_camera_info_url',
-        default_value='',
-        description='Override left camera calibration file URL '
-                    '(leave empty to use config file value)'
+        default_value=left_camera_url,
+        description='Left camera calibration file URL.'
     )
 
     right_camera_info_url_arg = DeclareLaunchArgument(
         'right_camera_info_url',
-        default_value='',
-        description='Override right camera calibration file URL '
-                    '(leave empty to use config file value)'
+        default_value=right_camera_url,
+        description='Right camera calibration file URL.'
     )
-
-    # ============================================================================
-    # PARAMETER OVERRIDE LOGIC
-    # ============================================================================
-
-    def build_parameter_overrides():
-        """Build parameter overrides that are not empty."""
-        overrides = {}
-
-        # Only add overrides if launch arguments are provided (not empty)
-
-        return overrides
 
     # ============================================================================
     # NODE CONFIGURATION
@@ -141,18 +99,12 @@ def generate_launch_description():
         name='stereo_camera_node',
         namespace=LaunchConfiguration('namespace'),
         parameters=[
-            PathJoinSubstitution([
-                FindPackageShare(stereo_package_name),
-                'config',
-                'stereo_camera_config.yaml'
-            ]),
+            LaunchConfiguration('config_file'),
             # Direct parameter overrides for key runtime settings
             {
-                'calibration.transforms.publish_camera_transforms':
-                    LaunchConfiguration('publish_camera_transforms'),
                 # Override calibration file paths with resolved absolute file URLs
-                'calibration.left_camera_info_url': left_camera_url,
-                'calibration.right_camera_info_url': right_camera_url,
+                'calibration.left_camera_info_url': LaunchConfiguration('left_camera_info_url'),
+                'calibration.right_camera_info_url': LaunchConfiguration('right_camera_info_url'),
                 'calibration.stereo_calibration_url': stereo_calibration_url,
                 # Override the non-optical *_link defaults from the config yaml.
                 'frames.left_frame_id': LaunchConfiguration('left_frame_id'),
@@ -233,10 +185,6 @@ def generate_launch_description():
         config_file_arg,
         namespace_arg,
         log_level_arg,
-        camera_width_arg,
-        camera_height_arg,
-        camera_fps_arg,
-        stereo_algorithm_arg,
         publish_camera_transforms_arg,
         left_camera_info_url_arg,
         right_camera_info_url_arg,

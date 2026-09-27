@@ -4,8 +4,6 @@
 #include <memory>
 #include <string>
 #include <functional>
-#include <vector>
-#include <map>
 #include <atomic>
 #include <thread>
 #include <mutex>
@@ -26,15 +24,6 @@ struct CameraConfig
   std::string format = "BGR";
   bool use_hardware_acceleration = true;
   bool flip_180 = false;
-};
-
-// Pipeline template structure for robust pipeline building
-struct PipelineTemplate
-{
-  std::string name;
-  std::string template_str;
-  std::string description;
-  int priority;
 };
 
 // Abstract camera interface
@@ -65,13 +54,7 @@ public:
 protected:
   CameraConfig config_;
   std::atomic<bool> running_{false};
-
-  // Static pipeline cache for GStreamer pipelines
-  static std::map<std::string, std::string> pipeline_cache_;
 };
-
-// Initialize the static pipeline cache
-std::map<std::string, std::string> CameraInterface::pipeline_cache_;
 
 // ============================================================================
 // JETSON CSI CAMERA IMPLEMENTATION (Header-Only)
@@ -98,8 +81,7 @@ public:
   {
     config_ = config;
 
-    // Use robust pipeline building with testing and caching
-    std::string pipeline = build_gstreamer_pipeline(config);
+    std::string pipeline = make_pipeline(config);
 
     cap_.open(pipeline, cv::CAP_GSTREAMER);
 
@@ -130,9 +112,6 @@ public:
       std::cerr << "Failed to open CSI camera with pipeline: " << pipeline << std::endl;
       return false;
     }
-
-    // Set buffer size for performance
-    cap_.set(cv::CAP_PROP_BUFFERSIZE, buffer_size_);
 
     std::cout << "Jetson CSI Camera initialized successfully" << std::endl;
     return true;
@@ -240,10 +219,11 @@ public:
 
   void set_buffer_size(int size) override
   {
+    // CAP_PROP_BUFFERSIZE is a no-op for OpenCV's GStreamer backend; queue
+    // depth is bounded in the pipeline itself via appsink's
+    // max-buffers=1 drop=true (see make_pipeline()). Kept as a stored value
+    // only so callers built against this interface still compile.
     buffer_size_ = std::max(1, size);
-    if (cap_.isOpened()) {
-      cap_.set(cv::CAP_PROP_BUFFERSIZE, buffer_size_);
-    }
   }
 
   void enable_threading(bool enable) override
@@ -277,121 +257,64 @@ public:
   }
 
 private:
-  // Robust pipeline builder with testing and caching
-  std::string build_gstreamer_pipeline(const CameraConfig & config)
+  // Build the nvarguscamerasrc pipeline for this config. GRAY8 lets
+  // nvvidconv output grayscale directly in hardware, removing the CPU
+  // videoconvert stage and the consumer's BGR->GRAY cvtColor. BGR8 (the
+  // shipped default, config/stereo_camera_config.yaml) is colour-preserving
+  // but similarly skips the CPU videoconvert stage: nvvidconv outputs BGRx
+  // (4-channel) directly, appsink hands that straight to OpenCV as a
+  // CV_8UC4 Mat, and the consumer (stereo_camera_node.cpp) publishes it as
+  // bgra8 and uses cv::COLOR_BGRA2GRAY where a single channel is needed.
+  // This is what removes the CPU videoconvert + BGR2GRAY double-conversion
+  // jetank_perception-04 measured, without dropping colour for the raw/web
+  // viewer path. Any other requested format falls back to the original
+  // BGRx + CPU videoconvert path, since it is not one this node's
+  // consumers have been made 4-channel-aware for. max-buffers=1 drop=true
+  // sync=false bounds appsink's queue depth itself, since
+  // CAP_PROP_BUFFERSIZE is a no-op for OpenCV's GStreamer backend.
+  //
+  // NOTE: nvvidconv -> BGRx in system memory was already the shipped path; this
+  // branch only drops the CPU videoconvert element. The real dependency is
+  // OpenCV's GStreamer appsink caps fallback (>= 4.5.1), which accepts BGRx and
+  // delivers CV_8UC4 frames; both OpenCV builds on the Jetson qualify. Runtime
+  // check: the "Frame channels:" debug print below should report 4.
+  //
+  // This replaces a template/cache/fallback/compatibility-test system that
+  // only ever had one real template: the "cache" was a single entry keyed
+  // by config, the "fallback" (plain videoconvert, no nvvidconv, no size
+  // caps) could not have negotiated NVMM output or honoured the requested
+  // resolution, and the compatibility test opened a second full camera
+  // capture (with a frame read) per sensor at startup purely to validate
+  // the one template that always ran.
+  std::string make_pipeline(const CameraConfig & config)
   {
-    // Create a cache key based on configuration
-    std::string cache_key = create_cache_key(config);
-
-    // Check if we have a cached working pipeline for this configuration
-    auto cached_it = pipeline_cache_.find(cache_key);
-    if (cached_it != pipeline_cache_.end()) {
-      std::cout << "[PIPELINE] Using cached pipeline for " << cache_key << std::endl;
-      return cached_it->second;
-    }
-
-    // Define pipeline templates in order of preference
-    std::vector<PipelineTemplate> templates = get_pipeline_templates();
-
-    std::cout << "[PIPELINE] Testing " << templates.size() << " pipeline configurations" <<
-      std::endl;
-
-    // Test each pipeline template
-    for (const auto & template_config : templates) {
-      std::string pipeline = build_pipeline_from_template(template_config, config);
-
-      std::cout << "[PIPELINE] Testing: " << template_config.name << std::endl;
-
-      if (test_pipeline_compatibility(pipeline)) {
-        std::cout << "[PIPELINE] ✓ SUCCESS: " << template_config.name << " works!" << std::endl;
-
-        // Cache this successful configuration
-        pipeline_cache_[cache_key] = pipeline;
-        return pipeline;
-      } else {
-        std::cout << "[PIPELINE] ✗ FAILED: " << template_config.name << std::endl;
-      }
-    }
-
-    // If all templates fail, return a minimal fallback
-    std::string fallback = get_fallback_pipeline(config);
-    std::cout << "[PIPELINE] ⚠ WARNING: Using fallback pipeline" << std::endl;
-    return fallback;
-  }
-
-  std::vector<PipelineTemplate> get_pipeline_templates()
-  {
-    std::vector<PipelineTemplate> templates;
-
-    templates.push_back(
-      {
-        "Scaled_Output",
-        "nvarguscamerasrc sensor-id=%d ! video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=30/1 ! nvvidconv ! video/x-raw,width=%d,height=%d,format=BGRx ! videoconvert ! appsink",
-        "Sensor with hardware scaling",
-        6
-      });
-
-    return templates;
-  }
-
-  std::string build_pipeline_from_template(
-    const PipelineTemplate & template_config,
-    const CameraConfig & config)
-  {
-    char pipeline_buffer[1024];
-
-    if (template_config.name == "Scaled_Output") {
-      snprintf(
-        pipeline_buffer, sizeof(pipeline_buffer),
-        template_config.template_str.c_str(),
-        config.sensor_id, config.width, config.height);
+    const char * caps_template;
+    if (config.format == "GRAY8") {
+      caps_template =
+        "nvarguscamerasrc sensor-id=%d ! "
+        "video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=%d/1 ! "
+        "nvvidconv ! video/x-raw,format=GRAY8,width=%d,height=%d ! "
+        "appsink max-buffers=1 drop=true sync=false";
+    } else if (config.format == "BGR8") {
+      caps_template =
+        "nvarguscamerasrc sensor-id=%d ! "
+        "video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=%d/1 ! "
+        "nvvidconv ! video/x-raw,format=BGRx,width=%d,height=%d ! "
+        "appsink max-buffers=1 drop=true sync=false";
     } else {
-      // Other templates
-      snprintf(
-        pipeline_buffer, sizeof(pipeline_buffer),
-        template_config.template_str.c_str(),
-        config.sensor_id);
+      caps_template =
+        "nvarguscamerasrc sensor-id=%d ! "
+        "video/x-raw(memory:NVMM),width=1280,height=720,format=NV12,framerate=%d/1 ! "
+        "nvvidconv ! video/x-raw,width=%d,height=%d,format=BGRx ! videoconvert ! "
+        "appsink max-buffers=1 drop=true sync=false";
     }
+
+    char pipeline_buffer[512];
+    snprintf(
+      pipeline_buffer, sizeof(pipeline_buffer),
+      caps_template, config.sensor_id, config.fps, config.width, config.height);
 
     return std::string(pipeline_buffer);
-  }
-
-  bool test_pipeline_compatibility(const std::string & pipeline)
-  {
-    cv::VideoCapture test_cap;
-
-    try {
-      test_cap.open(pipeline, cv::CAP_GSTREAMER);
-
-      if (!test_cap.isOpened()) {
-        return false;
-      }
-
-      cv::Mat test_frame;
-      bool frame_read = test_cap.read(test_frame);
-      test_cap.release();
-
-      return frame_read && !test_frame.empty();
-
-    } catch (const std::exception & e) {
-      if (test_cap.isOpened()) {
-        test_cap.release();
-      }
-      return false;
-    }
-  }
-
-  std::string get_fallback_pipeline(const CameraConfig & config)
-  {
-    return "nvarguscamerasrc sensor-id=" + std::to_string(config.sensor_id) +
-           " ! videoconvert ! appsink";
-  }
-
-  std::string create_cache_key(const CameraConfig & config)
-  {
-    return std::to_string(config.sensor_id) + "_" +
-           std::to_string(config.width) + "x" + std::to_string(config.height) + "_" +
-           std::to_string(config.fps) + "fps_" + config.format;
   }
 
   void capture_loop()

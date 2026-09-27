@@ -12,15 +12,6 @@ struct ComputeMetricsConfig
   bool publish_to_topic = false;
 };
 
-struct QualityMetricsConfig
-{
-  bool density = true;
-  bool completeness = true;
-  bool noise_level = true;
-  bool temporal_stability = false;
-  bool reprojection_error = false;
-};
-
 struct VisualizationConfig
 {
   bool enable = false;
@@ -28,13 +19,6 @@ struct VisualizationConfig
   bool publish_depth_uncertainty = false;
   bool publish_density_map = false;
   bool publish_epipolar_overlay = false;
-};
-
-struct CalibrationValidationConfig
-{
-  bool enable = false;
-  bool validate_on_startup = true;
-  bool log_rectification_quality = false;
 };
 
 struct ThresholdsConfig
@@ -49,9 +33,7 @@ struct QualityMonitoringConfig
   bool enable = false;
 
   ComputeMetricsConfig compute_metrics;
-  QualityMetricsConfig metrics;
   VisualizationConfig visualization;
-  CalibrationValidationConfig calibration_validation;
   ThresholdsConfig thresholds;
 
   // Convenience methods for common checks
@@ -63,11 +45,6 @@ struct QualityMonitoringConfig
   bool should_visualize() const
   {
     return enable && visualization.enable;
-  }
-
-  bool any_expensive_metrics_enabled() const
-  {
-    return metrics.temporal_stability || metrics.reprojection_error;
   }
 
   // Validation method

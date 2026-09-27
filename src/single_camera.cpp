@@ -1,7 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
-#include <cv_bridge/cv_bridge.h>
 #include "jetank_perception/camera_interface.hpp"
+#include "jetank_perception/image_msg_utils.hpp"
 #include <chrono>
 
 class CameraNode : public rclcpp::Node
@@ -109,7 +109,8 @@ private:
 
     try {
       // Convert OpenCV Mat to ROS2 Image message
-      auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", frame).toImageMsg();
+      auto msg = jetson_stereo_camera::mat_to_image_msg(
+        jetson_stereo_camera::raw_frame_encoding(frame), frame);
 
       // Set timestamp
       msg->header.stamp = this->get_clock()->now();
@@ -127,8 +128,8 @@ private:
         RCLCPP_INFO(this->get_logger(), "Published %d frames", frame_count_);
       }
 
-    } catch (const cv_bridge::Exception & e) {
-      RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(this->get_logger(), "Image encode exception: %s", e.what());
     }
   }
 

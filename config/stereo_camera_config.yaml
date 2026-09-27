@@ -15,9 +15,7 @@ stereo_camera:
       camera.left_sensor_id: 1
       camera.right_sensor_id: 0
       camera.use_hardware_acceleration: true
-      camera.buffer_size: 3
       camera.processing_threads: 4
-      camera.processing_quality: "balanced"
 
       # ============================================================================
       # FRAME CONFIGURATION
@@ -50,23 +48,16 @@ stereo_camera:
       calibration.left_camera_info_url: "file://$(find-pkg-share jetank_perception)/config/calibration/left_camera.yaml"
       calibration.right_camera_info_url: "file://$(find-pkg-share jetank_perception)/config/calibration/right_camera.yaml"
       calibration.stereo_calibration_url: "file://$(find-pkg-share jetank_perception)/config/calibration/stereo_calibration.yaml"
-      calibration.auto_load_calibration: false
-      calibration.min_calibration_samples: 30
-      calibration.max_reprojection_error: 0.5
-      calibration.default.focal_length: 300.0
-      calibration.default.baseline: 0.06
-      calibration.transforms.publish_camera_transforms: false
 
       # ============================================================================
       # POINT CLOUD CONFIGURATION
       # Optimized for 0.3-1.5m working range
       # ============================================================================
-      pointcloud.enable: true
       pointcloud.downsample_factor: 1
       pointcloud.max_processing_threads: 4
       pointcloud.voxel_filter.enable: true
       pointcloud.voxel_filter.leaf_size: 0.005        # 5mm voxels for detail at close range
-      pointcloud.statistical_filter.enable: true
+      pointcloud.statistical_filter.enable: false
       pointcloud.statistical_filter.k_neighbors: 30   # Reduced for faster processing
       pointcloud.statistical_filter.stddev_threshold: 2.0  # More lenient to keep more points
       pointcloud.range_filter.enable: true
@@ -80,7 +71,6 @@ stereo_camera:
       publishing.publish_rectified_images: true
       publishing.publish_disparity: true
       publishing.publish_pointcloud: true
-      publishing.qos_depth: 10
 
       # Compression configuration for raw images
       publishing.raw_images.compression.enabled: true
@@ -101,24 +91,6 @@ stereo_camera:
       # ============================================================================
       performance.log_performance: true
       performance.performance_log_interval: 100
-      performance.enable_multithreading: true
-      performance.thread_priority: 0
-      performance.enable_memory_optimization: true
-      performance.max_memory_usage_mb: 500
-        
-      logging.log_calibration_info: true
-      logging.log_processing_stats: false
-      logging.log_frame_drops: true
-
-      # ============================================================================
-      # DEVELOPMENT AND TESTING  
-      # ============================================================================
-      development.save_debug_images: false
-      development.debug_image_path: "/tmp/stereo_debug"
-      development.strict_frame_sync: true
-      development.max_frame_age_ms: 100
-      development.auto_restart_on_error: true
-      development.max_consecutive_errors: 5
 
       # ============================================================================
       # QUALITY MONITORING CONFIGURATION
@@ -132,24 +104,12 @@ stereo_camera:
       quality_monitoring.compute_metrics.log_interval: 10  # Log every N frames (set to 10 for debugging)
       quality_monitoring.compute_metrics.publish_to_topic: false  # Publish metrics to ROS topic
 
-      # Quality metrics to compute
-      quality_monitoring.metrics.density: false          # Point density calculation
-      quality_monitoring.metrics.completeness: true     # Coverage/hole detection
-      quality_monitoring.metrics.noise_level: false      # Standard deviation, outliers
-      quality_monitoring.metrics.temporal_stability: false  # Frame-to-frame comparison (more expensive)
-      quality_monitoring.metrics.reprojection_error: false  # Calibration quality (expensive)
-
       # Diagnostic visualization (expensive - for debugging only)
       quality_monitoring.visualization.enable: false
       quality_monitoring.visualization.publish_disparity_colored: true  # Color-coded disparity quality
       quality_monitoring.visualization.publish_depth_uncertainty: true  # Depth confidence heatmap
       quality_monitoring.visualization.publish_density_map: false        # Point density visualization
       quality_monitoring.visualization.publish_epipolar_overlay: false   # Rectification quality check
-
-      # Calibration quality validation
-      quality_monitoring.calibration_validation.enable: true
-      quality_monitoring.calibration_validation.validate_on_startup: true
-      quality_monitoring.calibration_validation.log_rectification_quality: true
 
       # Performance thresholds (warnings if quality drops)
       quality_monitoring.thresholds.min_point_density: 0.3          # Minimum acceptable density (0-1)

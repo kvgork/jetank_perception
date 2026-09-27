@@ -4,7 +4,6 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
-from launch.conditions import IfCondition
 
 
 def generate_launch_description():
@@ -73,8 +72,8 @@ def generate_launch_description():
 
     # Create the camera node
     camera_node = Node(
-        package='jetank_perception',  # Replace with your actual package name
-        executable='camera_node',     # Replace with your executable name
+        package='jetank_perception',
+        executable='camera_node',
         name=LaunchConfiguration('node_name'),
         namespace=LaunchConfiguration('namespace'),
         output='screen',
@@ -96,40 +95,6 @@ def generate_launch_description():
         ],
         respawn=True,  # Restart node if it crashes
         respawn_delay=2.0,  # Wait 2 seconds before restart
-    )
-
-    # Optional: Launch RViz2 for visualization
-    rviz_arg = DeclareLaunchArgument(
-        'launch_rviz',
-        default_value='false',
-        description='Launch RViz2 for image visualization'
-    )
-
-    rviz_node = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='rviz2',
-        arguments=['-d', '/path/to/your/rviz/config.rviz'],  # Optional: specify config file
-        condition=IfCondition(LaunchConfiguration('launch_rviz')),
-        output='screen'
-    )
-
-    # Optional: Launch image view for quick testing
-    image_view_arg = DeclareLaunchArgument(
-        'launch_image_view',
-        default_value='false',
-        description='Launch image_view for quick image display'
-    )
-
-    image_view_node = Node(
-        package='image_view',
-        executable='image_view',
-        name='image_view',
-        remappings=[
-            ('image', 'camera/image_raw')
-        ],
-        condition=IfCondition(LaunchConfiguration('launch_image_view')),
-        output='screen'
     )
 
     # Log the configuration being used
@@ -158,14 +123,10 @@ def generate_launch_description():
         node_name_arg,
         namespace_arg,
         enable_debug_arg,
-        rviz_arg,
-        image_view_arg,
 
         # Log configuration
         config_info,
 
         # Nodes
         camera_node,
-        rviz_node,
-        image_view_node,
     ])
