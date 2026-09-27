@@ -118,12 +118,22 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
   rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr disparity_pub_;    // Correct type
 
-  // Camera info managers. Each already advertises its own standard
-  // <ns>/set_camera_info service; this node used to additionally advertise
+  // Camera info managers. Each is constructed on its own sub-node (below) so
+  // its standard set_camera_info service is advertised under left/ and
+  // right/ instead of both managers colliding on the same plain
+  // set_camera_info service when constructed directly on `this` (see
+  // jetank_perception-21). This node used to additionally advertise
   // left/right/calibrate_stereo services that duplicated/collided with
-  // those and produced a fake stereo calibration (see jetank_perception-21).
+  // those and produced a fake stereo calibration.
   std::shared_ptr<camera_info_manager::CameraInfoManager> left_info_manager_;
   std::shared_ptr<camera_info_manager::CameraInfoManager> right_info_manager_;
+  // Sub-nodes the managers above are constructed on, so their
+  // set_camera_info services live at left/set_camera_info and
+  // right/set_camera_info (what `camera_calibration --commit` expects).
+  // Kept alive for the lifetime of the managers, which only hold a raw
+  // rclcpp::Node*.
+  rclcpp::Node::SharedPtr left_info_sub_node_;
+  rclcpp::Node::SharedPtr right_info_sub_node_;
 
   // Processing thread
   std::unique_ptr<std::thread> processing_thread_;
@@ -742,11 +752,16 @@ private:
 
   void setup_camera_info_managers()
   {
+    left_info_sub_node_ = create_sub_node("left");
+    right_info_sub_node_ = create_sub_node("right");
+
     left_info_manager_ = std::make_shared<camera_info_manager::CameraInfoManager>(
-      this, "left", get_parameter("calibration.left_camera_info_url").as_string());
+      left_info_sub_node_.get(), "left",
+      get_parameter("calibration.left_camera_info_url").as_string());
 
     right_info_manager_ = std::make_shared<camera_info_manager::CameraInfoManager>(
-      this, "right", get_parameter("calibration.right_camera_info_url").as_string());
+      right_info_sub_node_.get(), "right",
+      get_parameter("calibration.right_camera_info_url").as_string());
   }
 
   void start_cameras()
