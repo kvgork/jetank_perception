@@ -1055,7 +1055,25 @@ private:
     // Rectify images if calibrated
     cv::Mat left_rectified, right_rectified;
     if (calibration_->is_calibrated()) {
-      calibration_->rectify_images(left_frame, right_frame, left_rectified, right_rectified);
+      // Convert to grayscale before remapping: the CSI pipeline delivers BGR
+      // (3-channel), and remapping 3 channels only to immediately discard 2/3
+      // of them in compute_and_publish_disparity_and_pointcloud() wastes ~3x
+      // the remap bandwidth. This also fixes left_rect_pub_/right_rect_pub_
+      // below, which published the still-3-channel rectified Mat tagged as
+      // "mono8" (a real encoding/step mismatch for any raw subscriber).
+      cv::Mat left_gray_in, right_gray_in;
+      if (left_frame.channels() == 3) {
+        cv::cvtColor(left_frame, left_gray_in, cv::COLOR_BGR2GRAY);
+      } else {
+        left_gray_in = left_frame;
+      }
+      if (right_frame.channels() == 3) {
+        cv::cvtColor(right_frame, right_gray_in, cv::COLOR_BGR2GRAY);
+      } else {
+        right_gray_in = right_frame;
+      }
+
+      calibration_->rectify_images(left_gray_in, right_gray_in, left_rectified, right_rectified);
 
       // Publish rectified images (respect compression mode)
       if (publish_rectified_images_) {
