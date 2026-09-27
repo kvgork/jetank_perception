@@ -1069,15 +1069,30 @@ private:
     publish_camera_info(left_info_pub_, left_info_manager_, left_frame_id_, timestamp);
     publish_camera_info(right_info_pub_, right_info_manager_, right_frame_id_, timestamp);
 
+    // Compute the disparity/pointcloud/quality-metrics consumer predicates
+    // once per frame (subscriber counts plus logging cadence) so both the
+    // rectification remap below and compute_and_publish_disparity_and_pointcloud()
+    // use the identical result instead of re-deriving it independently. Since
+    // nothing here is cached, the predicate re-enables the skipped work on
+    // the very next frame as soon as a subscriber appears.
+    const DisparityConsumers disparity_consumers = compute_disparity_consumers();
+    const bool rectified_wanted = rect_image_consumers_wanted() || disparity_consumers.any();
+
     // Rectify images if calibrated
     cv::Mat left_rectified, right_rectified;
-    if (calibration_->is_calibrated()) {
+    if (calibration_->is_calibrated() && rectified_wanted) {
       // Convert to grayscale before remapping: the CSI pipeline delivers BGR
       // (3-channel), and remapping 3 channels only to immediately discard 2/3
       // of them in compute_and_publish_disparity_and_pointcloud() wastes ~3x
       // the remap bandwidth. This also fixes left_rect_pub_/right_rect_pub_
       // below, which published the still-3-channel rectified Mat tagged as
       // "mono8" (a real encoding/step mismatch for any raw subscriber).
+      //
+      // Skipping this whole block (remap included) when rectified_wanted is
+      // false additionally avoids the rectification remap itself when no
+      // rectified-image subscriber and no disparity/pointcloud/diagnostic
+      // consumer exists — that work is just as wasted as the disparity
+      // compute below when nobody reads the output.
       cv::Mat left_gray_in, right_gray_in;
       if (left_frame.channels() == 3) {
         cv::cvtColor(left_frame, left_gray_in, cv::COLOR_BGR2GRAY);
@@ -1122,8 +1137,9 @@ private:
     }
 
     // Compute and publish disparity and point cloud
-    if (calibration_->is_calibrated()) {
-      compute_and_publish_disparity_and_pointcloud(left_rectified, right_rectified, timestamp);
+    if (calibration_->is_calibrated() && disparity_consumers.any()) {
+      compute_and_publish_disparity_and_pointcloud(
+        left_rectified, right_rectified, timestamp, disparity_consumers);
     }
 
     quality_frame_counter_++;
@@ -1188,31 +1204,72 @@ private:
     pub->publish(std::move(compressed_msg));
   }
 
+  // Subscriber/logging-gated consumers of the rectified stereo pipeline
+  // output. Computed once per frame by compute_disparity_consumers() and
+  // threaded through to compute_and_publish_disparity_and_pointcloud() so
+  // that function's internal checks and its caller's gating (process_stereo_frames)
+  // agree on the same result instead of each re-deriving the five
+  // subscriber/logging predicates independently and risking desync.
+  struct DisparityConsumers
+  {
+    bool disparity = false;
+    bool pointcloud = false;
+    bool disparity_colored = false;
+    bool depth_uncertainty = false;
+    bool quality_metrics = false;
+
+    bool any() const
+    {
+      return disparity || pointcloud || disparity_colored || depth_uncertainty ||
+             quality_metrics;
+    }
+  };
+
+  DisparityConsumers compute_disparity_consumers() const
+  {
+    DisparityConsumers c;
+    c.disparity = publish_disparity_ && disparity_pub_ &&
+      disparity_pub_->get_subscription_count() > 0;
+    c.pointcloud = publish_pointcloud_ && pointcloud_pub_ &&
+      pointcloud_pub_->get_subscription_count() > 0;
+    c.disparity_colored = quality_config_.visualization.enable &&
+      quality_config_.visualization.publish_disparity_colored &&
+      disparity_colored_pub_ && disparity_colored_pub_->get_subscription_count() > 0;
+    c.depth_uncertainty = quality_config_.visualization.enable &&
+      quality_config_.visualization.publish_depth_uncertainty &&
+      depth_uncertainty_pub_ && depth_uncertainty_pub_->get_subscription_count() > 0;
+    // log_interval <= 0 is treated as "never" (rather than modulo-by-zero
+    // UB), matching QualityMonitoringConfig::validate()'s existing treatment
+    // of compute_metrics.log_interval <= 0 as an invalid/disabled setting.
+    c.quality_metrics = quality_config_.should_compute_any_metrics() &&
+      quality_config_.compute_metrics.log_interval > 0 &&
+      (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0);
+    return c;
+  }
+
+  // True when any rectified-image consumer (raw or compressed publisher)
+  // has a subscriber.
+  bool rect_image_consumers_wanted() const
+  {
+    return (left_rect_pub_ && left_rect_pub_->get_subscription_count() > 0) ||
+           (right_rect_pub_ && right_rect_pub_->get_subscription_count() > 0) ||
+           (left_rect_compressed_pub_ &&
+           left_rect_compressed_pub_->get_subscription_count() > 0) ||
+           (right_rect_compressed_pub_ &&
+           right_rect_compressed_pub_->get_subscription_count() > 0);
+  }
+
   void compute_and_publish_disparity_and_pointcloud(
     const cv::Mat & left_rectified,
     const cv::Mat & right_rectified,
-    const rclcpp::Time & timestamp)
+    const rclcpp::Time & timestamp,
+    const DisparityConsumers & consumers)
   {
-    // Every consumer of the disparity result is gated on subscriber count (or,
-    // for quality metrics, on the logging cadence); if none of them are active
-    // this frame, the GPU upload/BM/download plus the two cvtColor passes below
-    // would be pure waste, so check first and skip the whole computation.
-    const bool disparity_wanted = publish_disparity_ && disparity_pub_ &&
-      disparity_pub_->get_subscription_count() > 0;
-    const bool pointcloud_wanted = publish_pointcloud_ && pointcloud_pub_ &&
-      pointcloud_pub_->get_subscription_count() > 0;
-    const bool disparity_colored_wanted = quality_config_.visualization.enable &&
-      quality_config_.visualization.publish_disparity_colored &&
-      disparity_colored_pub_ && disparity_colored_pub_->get_subscription_count() > 0;
-    const bool depth_uncertainty_wanted = quality_config_.visualization.enable &&
-      quality_config_.visualization.publish_depth_uncertainty &&
-      depth_uncertainty_pub_ && depth_uncertainty_pub_->get_subscription_count() > 0;
-    const bool quality_metrics_wanted = quality_config_.should_compute_any_metrics() &&
-      (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0);
-
-    if (!disparity_wanted && !pointcloud_wanted && !disparity_colored_wanted &&
-      !depth_uncertainty_wanted && !quality_metrics_wanted)
-    {
+    // The caller (process_stereo_frames) only invokes this function when
+    // consumers.any() is true; this is kept as a defensive guard so the GPU
+    // upload/BM/download plus the two cvtColor passes below stay skipped if
+    // this function is ever called from elsewhere without that gate.
+    if (!consumers.any()) {
       return;
     }
 
@@ -1243,9 +1300,7 @@ private:
     }
 
     // Quality monitoring: Analyze disparity quality
-    if (quality_config_.should_compute_any_metrics() &&
-      (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0))
-    {
+    if (consumers.quality_metrics) {
       RCLCPP_INFO(get_logger(), "--- Stage 3: Disparity Quality ---");
       auto disp_quality = analyze_disparity_quality(disparity);
       disp_quality.log(get_logger());
@@ -1260,10 +1315,7 @@ private:
     }
 
     // Visualization: Publish colored disparity
-    if (quality_config_.visualization.enable &&
-      quality_config_.visualization.publish_disparity_colored &&
-      disparity_colored_pub_ && disparity_colored_pub_->get_subscription_count() > 0)
-    {
+    if (consumers.disparity_colored) {
       cv::Mat colored = create_disparity_colored(
         disparity, stereo_config_.min_disparity,
         stereo_config_.min_disparity + stereo_config_.num_disparities);
@@ -1276,10 +1328,7 @@ private:
     }
 
     // Visualization: Publish depth uncertainty
-    if (quality_config_.visualization.enable &&
-      quality_config_.visualization.publish_depth_uncertainty &&
-      depth_uncertainty_pub_ && depth_uncertainty_pub_->get_subscription_count() > 0)
-    {
+    if (consumers.depth_uncertainty) {
       cv::Mat uncertainty = create_depth_uncertainty_map(disparity, calibration_->get_Q_matrix());
       if (!uncertainty.empty()) {
         auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", uncertainty).toImageMsg();
@@ -1290,21 +1339,19 @@ private:
     }
 
     // Publish disparity image
-    if (publish_disparity_ && disparity_pub_ && disparity_pub_->get_subscription_count() > 0) {
+    if (consumers.disparity) {
       publish_disparity_image(disparity, timestamp);
     }
 
     // Generate and publish point cloud
-    if (publish_pointcloud_ && pointcloud_pub_ && pointcloud_pub_->get_subscription_count() > 0) {
+    if (consumers.pointcloud) {
       auto pointcloud = stereo_processor_->generate_pointcloud(
         disparity,
         calibration_->get_Q_matrix());
 
       if (pointcloud && !pointcloud->empty()) {
         // Quality monitoring: Analyze point cloud before filtering
-        if (quality_config_.should_compute_any_metrics() &&
-          (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0))
-        {
+        if (consumers.quality_metrics) {
           RCLCPP_INFO(get_logger(), "--- Stage 4: Point Cloud (Before Filtering) ---");
           auto pc_quality_before = analyze_pointcloud_quality(pointcloud);
           pc_quality_before.log(get_logger(), "BEFORE Filtering");
@@ -1314,9 +1361,7 @@ private:
         pointcloud_filter_->filter(pointcloud);
 
         // Quality monitoring: Analyze point cloud after filtering
-        if (quality_config_.should_compute_any_metrics() &&
-          (quality_frame_counter_ % quality_config_.compute_metrics.log_interval == 0))
-        {
+        if (consumers.quality_metrics) {
           RCLCPP_INFO(get_logger(), "--- Stage 5: Point Cloud (After Filtering) ---");
           auto pc_quality_after = analyze_pointcloud_quality(pointcloud);
           pc_quality_after.log(get_logger(), "AFTER Filtering");
